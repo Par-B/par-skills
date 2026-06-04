@@ -86,7 +86,7 @@ def collect(root, email, since, until):
 
 
 def lines(a, d):
-    return f"+{a} −{d}"
+    return f"+{a:,} −{d:,}"   # thousands separators, e.g. +11,686 −1,476
 
 
 def esc(s):

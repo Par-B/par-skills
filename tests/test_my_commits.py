@@ -138,3 +138,12 @@ def test_no_identity_sentinel(tmp_path):
                        capture_output=True, text=True, env=env)
     assert p.returncode == 4
     assert "NO_GIT_IDENTITY" in p.stdout
+
+
+def test_thousands_separator(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "big.txt", "x\n" * 1500, "2026-06-04")   # 1500 additions
+    rc, out = _run(r, "today", "2026-06-04")
+    assert rc == 0
+    assert "+1,500" in out
+    assert "**Total (1)**" in out
