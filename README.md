@@ -51,77 +51,70 @@ phrases trigger the skill), or use the explicit `/plugin:skill` form.
 
 ## ⚠️ Permissions & trust — please read before installing
 
-Some skill plugins here **auto-approve running a script that ships inside them.**
-For example, `status-board` bundles a `PreToolUse` hook
-(`plugins/status-board/hooks/hooks.json`) that lets Claude Code run its render
-script — `skills/status-board/scripts/status_board.py` — **without prompting you
-each time**.
+Both skills here **auto-approve running their own bundled script** via a
+`PreToolUse` hook, so they don't prompt on every run:
 
-What this means:
+| Skill | Auto-approved script | What it touches |
+|---|---|---|
+| `status-board` | `skills/status-board/scripts/status_board.py` | reads your `plans/` dir, prints a table |
+| `my-commits` | `skills/my-commits/scripts/my_commits.py` | runs read-only git, prints a table |
 
-- **You are not asked per run, and there is no separate "allow this script"
-  prompt.** Your consent is the **plugin install / trust step** — by installing
-  and trusting a plugin, you accept that its bundled hook runs.
-- **Scope is tight.** The hook auto-approves *only* that one script (any
-  `--scope` argument) and nothing else — not all Python, not all Bash.
-- **It is read-only.** `status_board.py` only reads your `plans/` directory and
-  prints a table. It does not write, delete, or make network calls.
-- **Write actions still prompt.** The skill's `plans/` bootstrap
-  (`mkdir`/`touch`/`cp`) is deliberately **not** auto-approved and will ask you.
+What this means (same for both):
 
-If you'd rather not have a bundled auto-approval, delete that plugin's
-`hooks/hooks.json` before installing (or fork without it); the skill still works,
-you'll just be prompted to approve the render command.
+- **No per-run prompt, and no separate "allow this script" prompt.** Your consent
+  is the **plugin install / trust step** — by installing and trusting a plugin you
+  accept that its bundled hook runs.
+- **Scope is tight.** Each hook auto-approves *only* its own script (any
+  arguments) — not all Python, not all Bash.
+- **Read-only.** Neither script writes, deletes, or makes network calls.
+- **Write actions still prompt.** `status-board`'s `plans/` bootstrap
+  (`mkdir`/`touch`/`cp`) is **not** auto-approved; `my-commits` never writes.
+
+To opt out of a skill's auto-approval, delete that plugin's `hooks/hooks.json`
+before installing (or fork without it); the skill still works — you'll just be
+prompted to approve its script each run.
 
 ## Security
 
-The auto-approved script (`status_board.py`) is intentionally small and
-constrained so it's easy to vet:
+Both auto-approved scripts are small, dependency-light, and read-only, so they're
+easy to vet.
 
-- **Standard library only** — imports just `argparse`, `os`, `re`, `sys`. No
-  third-party packages, no `pip install`.
-- **Read-only** — it reads `plans/` and prints a Markdown table. It never writes,
-  deletes, shells out, runs `eval`/`exec`, or makes network calls. (The skill's
-  `plans/` bootstrap that *does* create files is plain `mkdir`/`cp` run
-  separately, and is **not** auto-approved — it prompts.)
+**`status-board` — `status_board.py`**
+- Standard library only: `argparse`, `os`, `re`, `sys`. No third-party packages.
+- Read-only: reads `plans/`, prints a table; never writes, deletes, shells out,
+  `eval`/`exec`s, or networks. (The separate `plans/` bootstrap that creates files
+  is plain `mkdir`/`cp` and is **not** auto-approved — it prompts.)
 
-**Audit it yourself** (the second command should print nothing — no
-writes/network/exec):
+**`my-commits` — `my_commits.py`**
+- Standard library only: `argparse`, `subprocess`, `sys`, `datetime`.
+- Shells out to **read-only git** only — `git rev-parse`, `git config --get`,
+  `git log`; never commits, pushes, checks out, fetches, or networks.
+- Uses `git log --since-as-filter`, requiring **git ≥ 2.37** (July 2022); on older
+  git a date window may drop commits whose author-date is out of order.
+
+**Audit either script yourself** — point `F` at whichever you're installing:
 
 ```bash
 F=plugins/status-board/skills/status-board/scripts/status_board.py
-grep -nE "^(import|from) " "$F"      # expect only: argparse, os, re, sys
-grep -nE "open\([^)]*['\"][wax]|subprocess|os\.system|socket|urllib|requests|eval\(|exec\(|__import__|shutil|Popen" "$F"
+# F=plugins/my-commits/skills/my-commits/scripts/my_commits.py
+grep -nE "^(import|from) " "$F"   # status_board: argparse/os/re/sys · my_commits: +subprocess/datetime
+grep -nE "open\([^)]*['\"][wax]|os\.system|socket|urllib|requests|eval\(|exec\(|__import__|shutil|Popen" "$F"  # both: prints nothing
 ```
 
-**Run it sandboxed.** For a defense-in-depth posture, enable Claude Code's
-built-in sandbox so *every* Bash command (this script included) runs confined —
-no network and restricted filesystem writes by default. In `settings.json`:
+(`my-commits` imports `subprocess` to invoke read-only git — that's the one
+expected entry in the first command; it never uses `os.system`/`Popen`/network.)
+
+**Run it sandboxed.** For defense in depth, enable Claude Code's built-in sandbox
+so *every* Bash command runs confined — no network, restricted filesystem writes.
+In `settings.json`:
 
 ```json
 { "sandbox": { "enabled": true } }
 ```
 
 On Linux this uses `bubblewrap` (`bwrap` must be installed); on macOS it uses the
-system Seatbelt sandbox. This protects against all tool commands, not just this
-plugin — the right layer for the "scripts from unknown sources" concern.
-
-### `my-commits` note
-
-`my-commits` differs from `status-board` in one way: its script **shells out to
-git** (`subprocess`). It runs only **read-only git** — `git rev-parse`,
-`git config --get`, `git log` — and never commits, pushes, checks out, fetches,
-or hits the network. Its auto-approve hook covers only that one script.
-
-It uses `git log --since-as-filter`, which requires **git ≥ 2.37** (July 2022);
-on older git the date window may drop commits whose author-date is out of order.
-
-Audit its imports:
-
-```bash
-grep -nE "^(import|from) " plugins/my-commits/skills/my-commits/scripts/my_commits.py
-# expect only: argparse, subprocess, sys, datetime
-```
+system Seatbelt sandbox. It protects against all tool commands, not just these
+plugins — the right layer for the "scripts from unknown sources" concern.
 
 **Pin what you install.** The repo is public and versioned — review the exact
 commit before installing, and pin your marketplace to a tag/ref for immutability
@@ -132,15 +125,20 @@ rather than tracking the moving default branch.
 ```text
 par-skills/                              marketplace "par-plugins"
 ├── .claude-plugin/marketplace.json      lists each skill plugin
-└── plugins/
-    └── status-board/                    plugin "status-board" (install à la carte)
+└── plugins/                             one plugin per skill (install à la carte)
+    ├── status-board/
+    │   ├── .claude-plugin/plugin.json
+    │   ├── hooks/hooks.json             auto-approves its render script
+    │   └── skills/status-board/
+    │       ├── SKILL.md
+    │       ├── scripts/status_board.py  read-only scanner (auto-approved)
+    │       └── references/readme-template.md
+    └── my-commits/
         ├── .claude-plugin/plugin.json
-        ├── hooks/hooks.json             auto-approves the render script
-        └── skills/
-            └── status-board/
-                ├── SKILL.md
-                ├── scripts/status_board.py    read-only scanner (auto-approved)
-                └── references/readme-template.md
+        ├── hooks/hooks.json             auto-approves its git-report script
+        └── skills/my-commits/
+            ├── SKILL.md
+            └── scripts/my_commits.py    read-only git report (auto-approved)
 ```
 
 Adding a new skill = a new `plugins/<skill>/` plugin plus an entry in
