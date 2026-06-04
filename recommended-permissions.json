@@ -1,0 +1,52 @@
+{
+  "_comment": "Recommended baseline Claude Code permissions — a SAFE, conservative default. Copy the `permissions` object into your own ~/.claude/settings.json (global) or a project .claude/settings.json, MERGING with any permissions you already have. Precedence is deny > ask > allow. This is a hand-copied template, not an auto-installed file, and it contains NO secrets/paths. See README 'Recommended permissions' for optional add-on groups (build tools, language runtimes, file-mutation, etc.) you can opt into. Remove this _comment key before use (settings.json is strict JSON).",
+  "permissions": {
+    "allow": [
+      "Read",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(rg:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(diff:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(cut:*)",
+      "Bash(tr:*)",
+      "Bash(jq:*)",
+      "Bash(which:*)",
+      "Bash(command -v:*)",
+      "Bash(test:*)",
+      "Bash(true)",
+      "Bash(echo:*)",
+      "Bash(printf:*)",
+      "Bash(git:*)",
+      "Write(/tmp/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(sudo rm:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(shutdown:*)",
+      "Bash(reboot:*)"
+    ],
+    "ask": [
+      "Bash(sudo:*)",
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git rebase:*)",
+      "Bash(gh:*)"
+    ]
+  }
+}

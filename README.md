@@ -120,11 +120,60 @@ plugins — the right layer for the "scripts from unknown sources" concern.
 commit before installing, and pin your marketplace to a tag/ref for immutability
 rather than tracking the moving default branch.
 
+## Recommended permissions
+
+A conservative, **secret-free and path-free** baseline of Claude Code permissions
+lives in [`recommended-permissions.json`](recommended-permissions.json). It's a
+hand-copied template — there is no "import a permissions file" command.
+
+**How to use:** open the file, copy the `permissions` object, and **merge** it
+into your own settings — `~/.claude/settings.json` (applies everywhere) or a
+project's `.claude/settings.json` (that repo only). If you already have a
+`permissions` block, *append* to the `allow`/`deny`/`ask` arrays rather than
+replacing them; drop the `_comment` key (strict JSON). Restart or reload Claude
+Code to apply. Precedence is **deny > ask > allow**.
+
+**What the baseline grants (safe):** read-only inspection (`ls`, `cat`, `rg`,
+`grep`, `find`, `diff`, `jq`, …), scoped web (`WebSearch`, GitHub `WebFetch`),
+`git` (dangerous subcommands gated below), and scratch writes to `/tmp`. It
+**denies** destructive commands (`rm -rf /`, `dd`, `mkfs`, `shutdown`, …) and
+**asks** before `sudo`, `git push`, `git reset --hard`, `git clean`,
+`git rebase`, and `gh`.
+
+**Deliberately excluded** — these auto-approve *arbitrary code* or escalate
+privileges, so they're left out on purpose (add them only for repos/machines you
+trust):
+
+- `Bash(bash:*)`, `Bash(source:*)` — run arbitrary scripts
+- `Bash(python3:*)`, `Bash(perl:*)`, `Bash(node:*)` — run arbitrary code
+- `Bash(xargs:*)`, `Bash(timeout:*)`, `Bash(tee:*)` — arbitrary-exec / write vectors
+- any `Bash(sudo …)` **allow** (sudo is routed to `ask` instead)
+- absolute-path `Write(...)`/`Edit(...)` — machine-specific; add your own
+
+**Optional add-on groups** — append to `allow` only if you want them:
+
+```jsonc
+// File management (can overwrite local files)
+"Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(touch:*)", "Bash(ln:*)",
+// Your project (replace the path with your repo)
+"Edit(/path/to/your/repo/**)", "Write(/path/to/your/repo/**)",
+// C / build toolchain (runs the project's build code — trust the repo)
+"Bash(make:*)", "Bash(cmake:*)", "Bash(gcc:*)", "Bash(cc:*)", "Bash(clang:*)", "Bash(pkg-config:*)",
+// Language runtimes (arbitrary code — trust the repo)
+"Bash(python3:*)", "Bash(uv run:*)", "Bash(node:*)", "Bash(cargo:*)",
+// Systems / perf tooling
+"Bash(valgrind:*)", "Bash(gdb:*)", "Bash(strace:*)", "Bash(perf:*)", "Bash(objdump:*)", "Bash(nm:*)", "Bash(readelf:*)"
+```
+
+(Shown as `jsonc` with comments for readability — strip the comments when pasting
+into strict-JSON `settings.json`.)
+
 ## Layout
 
 ```text
 par-skills/                              marketplace "par-plugins"
 ├── .claude-plugin/marketplace.json      lists each skill plugin
+├── recommended-permissions.json         optional baseline perms (copy into settings.json)
 └── plugins/                             one plugin per skill (install à la carte)
     ├── status-board/
     │   ├── .claude-plugin/plugin.json
