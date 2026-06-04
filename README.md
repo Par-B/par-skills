@@ -23,6 +23,7 @@ Update later with `/plugin marketplace update par-plugins`.
 | Plugin | Invoke | What it does |
 |---|---|---|
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
+| `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a period (today / yesterday / this week / this month) as a table — per-commit for a day, per-day for a range, with line changes. |
 
 ## ⚠️ Permissions & trust — please read before installing
 
@@ -80,6 +81,23 @@ no network and restricted filesystem writes by default. In `settings.json`:
 On Linux this uses `bubblewrap` (`bwrap` must be installed); on macOS it uses the
 system Seatbelt sandbox. This protects against all tool commands, not just this
 plugin — the right layer for the "scripts from unknown sources" concern.
+
+### `my-commits` note
+
+`my-commits` differs from `status-board` in one way: its script **shells out to
+git** (`subprocess`). It runs only **read-only git** — `git rev-parse`,
+`git config --get`, `git log` — and never commits, pushes, checks out, fetches,
+or hits the network. Its auto-approve hook covers only that one script.
+
+It uses `git log --since-as-filter`, which requires **git ≥ 2.37** (July 2022);
+on older git the date window may drop commits whose author-date is out of order.
+
+Audit its imports:
+
+```bash
+grep -nE "^(import|from) " plugins/my-commits/skills/my-commits/scripts/my_commits.py
+# expect only: argparse, subprocess, sys, datetime
+```
 
 **Pin what you install.** The repo is public and versioned — review the exact
 commit before installing, and pin your marketplace to a tag/ref for immutability

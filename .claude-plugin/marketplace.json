@@ -10,6 +10,11 @@
       "name": "status-board",
       "source": "./plugins/status-board",
       "description": "Render your plans/ directory as a lifecycle status board (and bootstrap the convention)"
+    },
+    {
+      "name": "my-commits",
+      "source": "./plugins/my-commits",
+      "description": "Report your commits in the current repo for a period (today/this week/...) as a table"
     }
   ]
 }
