@@ -25,6 +25,24 @@ Update later with `/plugin marketplace update par-plugins`.
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a period (today / yesterday / this week / this month) as a table — per-commit for a day, per-day for a range, with line changes. |
 
+### Try it
+
+After installing, just talk to Claude naturally — no slash command needed (these
+phrases trigger the skill), or use the explicit `/plugin:skill` form.
+
+**`status-board`** (run inside a repo that has a `plans/` directory):
+- "show me the status"
+- "what's next?"
+- "show me the future ideas"
+- "what did I finish recently?"
+- *(in a repo with no `plans/` yet)* "show me the status" → it offers to set one up
+
+**`my-commits`** (run inside any git repo):
+- "how many commits today?"
+- "show me my commits yesterday"
+- "how many commits this week?"
+- "my commits this month"
+
 ## ⚠️ Permissions & trust — please read before installing
 
 Some skill plugins here **auto-approve running a script that ships inside them.**
