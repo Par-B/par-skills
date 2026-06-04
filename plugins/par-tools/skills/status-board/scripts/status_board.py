@@ -46,7 +46,7 @@ def stem(name):
 
 
 def brace_expand(token):
-    """Expand one {a,b,c} group: foo-{x,y}.md -> [foo-x.md, foo-y.md].
+    """Expand every {a,b} group (cross-product): a-{x,y}-{1,2}.md -> 4 names.
 
     An empty option (the `,}` in `foo-{x,}.md`) is the author's shorthand for
     "drop this segment", so the preceding separator is stripped too -> foo.md.
@@ -57,7 +57,9 @@ def brace_expand(token):
     pre, post = token[:m.start()], token[m.end():]
     out = []
     for opt in m.group(1).split(","):
-        out.append((pre.rstrip("-_") if opt == "" else pre + opt) + post)
+        head = pre.rstrip("-_") if opt == "" else pre + opt
+        for tail in brace_expand(post):   # expand any remaining groups
+            out.append(head + tail)
     return out
 
 
@@ -71,10 +73,12 @@ def clean(text):
 
 
 def plan_files(d):
-    if not os.path.isdir(d):
+    try:
+        entries = os.listdir(d)
+    except OSError:                       # missing dir or no read permission
         return []
     return sorted(
-        f for f in os.listdir(d)
+        f for f in entries
         if f.endswith(".md") and f != "README.md" and not f.endswith(".tasks.json")
     )
 
@@ -88,10 +92,11 @@ def parse_readme(path):
     """Return (notes{stem:note}, documented_stems, table_stems)."""
     notes, documented, table = {}, set(), set()
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
         return notes, documented, table
+    text = text.replace("\r\n", "\n").replace("\r", " ")
     # Anything mentioned anywhere counts as "documented": .md tokens + backticked slugs.
     for tok in MD_TOKEN_RE.findall(text):
         for exp in brace_expand(tok):
@@ -103,7 +108,13 @@ def parse_readme(path):
     for line in text.splitlines():
         if "|" not in line:
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        # Split on unescaped pipes only, then unescape \| inside cells.
+        parts = re.split(r"(?<!\\)\|", line.strip())
+        if parts and parts[0] == "":
+            parts = parts[1:]
+        if parts and parts[-1] == "":
+            parts = parts[:-1]
+        cells = [p.strip().replace("\\|", "|") for p in parts]
         for i, c in enumerate(cells):
             toks = MD_TOKEN_RE.findall(c)
             toks = [t for t in toks if stem(t) != "README"]
@@ -124,10 +135,10 @@ def parse_readme(path):
 def fallback_desc(path):
     """First non-generic heading; else first prose line."""
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             lines = [ln.rstrip() for ln in fh]
     except OSError:
-        return ""
+        return "(unreadable)"
     first_prose = None
     for ln in lines:
         s = ln.strip()
@@ -151,7 +162,7 @@ def describe(fname, dir_path, notes):
 
 
 def esc(s):
-    return s.replace("|", "\\|")
+    return s.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
 
 
 def main():
