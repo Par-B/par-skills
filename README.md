@@ -8,11 +8,13 @@ install only the ones you want — à la carte, not all at once.
 
 ## Install
 
-Add the marketplace once, then install any skill plugin from it:
+Add the marketplace once, then install the skills you want — each is a separate
+plugin, so install one or both:
 
 ```text
 /plugin marketplace add Par-B/par-skills
 /plugin install status-board@par-plugins
+/plugin install my-commits@par-plugins
 ```
 
 Installed at user scope, a skill is available globally across all your projects.
