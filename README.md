@@ -159,6 +159,10 @@ trust):
 "Edit(/path/to/your/repo/**)", "Write(/path/to/your/repo/**)",
 // C / build toolchain (runs the project's build code — trust the repo)
 "Bash(make:*)", "Bash(cmake:*)", "Bash(gcc:*)", "Bash(cc:*)", "Bash(clang:*)", "Bash(pkg-config:*)",
+// Build wrapper (bear -- make runs the wrapped build, so it executes code too)
+"Bash(bear:*)",
+// Linters / static analysis / formatters (read source; some, e.g. clang-tidy --fix, can write)
+"Bash(clang-tidy:*)", "Bash(cppcheck:*)", "Bash(clang-format:*)", "Bash(include-what-you-use:*)", "Bash(shellcheck:*)",
 // Language runtimes (arbitrary code — trust the repo)
 "Bash(python3:*)", "Bash(uv run:*)", "Bash(node:*)", "Bash(cargo:*)",
 // Systems / perf tooling
