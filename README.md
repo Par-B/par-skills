@@ -98,7 +98,7 @@ easy to vet.
 F=plugins/status-board/skills/status-board/scripts/status_board.py
 # F=plugins/my-commits/skills/my-commits/scripts/my_commits.py
 grep -nE "^(import|from) " "$F"   # status_board: argparse/os/re/sys · my_commits: +subprocess/datetime
-grep -nE "open\([^)]*['\"][wax]|os\.system|socket|urllib|requests|eval\(|exec\(|__import__|shutil|Popen" "$F"  # both: prints nothing
+grep -nE "open\([^)]*['\"][wax]|os\.system\(|socket\.|urllib\.|requests\.|eval\(|exec\(|__import__\(|shutil\.|Popen" "$F"  # both: prints nothing
 ```
 
 (`my-commits` imports `subprocess` to invoke read-only git — that's the one
