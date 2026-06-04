@@ -52,17 +52,28 @@ def fmt(dt):
 
 
 def collect(root, email, since, until):
-    """List of commits oldest-first: {hash, date 'YYYY-MM-DD', subject, add, dele}."""
-    pretty = "C\x01%H\x01%ad\x01%s"  # 'C' record marker + fields, \x01-separated
+    """List of YOUR commits oldest-first: {hash, date 'YYYY-MM-DD', subject, add, dele}.
+
+    Filters on the EXACT author email (%ae) in Python — git's --author is a
+    case-insensitive regex, so an email containing '.' would false-match other
+    authors. The %ae field is matched literally instead.
+    """
+    pretty = "C\x01%H\x01%ae\x01%ad\x01%s"  # marker, hash, author-email, date, subject
+    # --since-as-filter (not --since): plain --since stops graph traversal at the
+    # first commit older than `since`, so a back-dated HEAD would hide newer
+    # in-range commits. The -as-filter variant applies the bound to every commit.
     rc, out = git(root, "log", "--reverse", "--no-merges",
-                  f"--author={email}",
-                  f"--since={fmt(since)}", f"--until={fmt(until)}",
+                  f"--since-as-filter={fmt(since)}", f"--until={fmt(until)}",
                   "--date=format-local:%Y-%m-%d",
                   f"--pretty=format:{pretty}", "--numstat")
     commits, cur = [], None
     for line in out.splitlines():
         if line.startswith("C\x01"):
-            _, h, d, s = line.split("\x01")
+            # maxsplit=4 keeps any stray \x01 inside the subject field
+            _, h, ae, d, s = line.split("\x01", 4)
+            if ae != email:
+                cur = None                  # skip this commit AND its numstat rows
+                continue
             cur = {"hash": h, "date": d, "subject": s, "add": 0, "dele": 0}
             commits.append(cur)
         elif line.strip() and cur is not None:
