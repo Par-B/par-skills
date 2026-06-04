@@ -141,15 +141,23 @@ def _last_day(y, m):
 
 
 def rolling_bounds(now, n_days):
-    """(since, until) for the last `n_days` calendar days, inclusive of today."""
+    """(since, until) for the last `n_days` calendar days, inclusive of today.
+    An absurdly large window clamps `since` to datetime.min (= all history)."""
     start_today = datetime(now.year, now.month, now.day)
-    return start_today - timedelta(days=n_days - 1), start_today + timedelta(days=1)
+    try:
+        since = start_today - timedelta(days=n_days - 1)
+    except (OverflowError, ValueError):
+        since = datetime.min
+    return since, start_today + timedelta(days=1)
 
 
 def subtract_months(dt, n):
-    """`dt` shifted back `n` calendar months, clamping the day to the target month."""
+    """`dt` shifted back `n` calendar months, clamping the day to the target month.
+    An absurdly large `n` (year < 1) clamps to datetime.min (= all history)."""
     idx = dt.year * 12 + (dt.month - 1) - n
     y, m = idx // 12, idx % 12 + 1
+    if y < 1:
+        return datetime.min
     return datetime(y, m, min(dt.day, _last_day(y, m)))
 
 
@@ -174,7 +182,10 @@ def parse_month(spec, now):
             if not m:
                 return None
             y = now.year if m <= now.month else now.year - 1
-    return datetime(y, m, 1), _next_month_first(y, m)
+    try:
+        return datetime(y, m, 1), _next_month_first(y, m)
+    except (ValueError, OverflowError):     # e.g. year 0 / out of range
+        return None
 
 
 def main():
@@ -203,7 +214,13 @@ def main():
         print("NO_GIT_IDENTITY")
         return 4
 
-    now = datetime.strptime(args.now, "%Y-%m-%d").date() if args.now else date.today()
+    if args.now:
+        try:
+            now = datetime.strptime(args.now, "%Y-%m-%d").date()
+        except ValueError:
+            ap.error(f"--now must be a valid YYYY-MM-DD date: {args.now!r}")
+    else:
+        now = date.today()
     start_today = datetime(now.year, now.month, now.day)
     is_range = True                            # everything below the day periods is per-day
 

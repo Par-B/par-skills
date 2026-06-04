@@ -226,3 +226,25 @@ def test_bad_month_is_error(tmp_path):
     r = _repo(tmp_path)
     rc, out = _run_args(r, "--month", "notamonth", "--now", "2026-06-04")
     assert rc != 0
+
+
+def test_bad_now_is_error(tmp_path):
+    r = _repo(tmp_path)
+    for bad in ("notadate", "2026-02-30"):
+        rc, out = _run_args(r, "--period", "today", "--now", bad)
+        assert rc != 0                       # clean ap.error, not a traceback
+
+
+def test_month_year_zero_is_error(tmp_path):
+    r = _repo(tmp_path)
+    rc, out = _run_args(r, "--month", "0000-01", "--now", "2026-06-04")
+    assert rc != 0
+
+
+def test_huge_window_clamps_no_crash(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "a.txt", "a\n", "2026-06-04")
+    for args in (("--days", "100000000"), ("--weeks", "99999999"), ("--months", "100000")):
+        rc, out = _run_args(r, *args, "--now", "2026-06-04")
+        assert rc == 0                       # clamped to all-history, not a crash
+        assert "**Total** | **1**" in out
