@@ -29,13 +29,15 @@ X plan", use `full` and point the user at the matching row.
 ### Fast path (preferred): the bundled script
 
 Use it when a Bash shell **and** a Python 3 interpreter are available. Run it as a
-**single, plain command** (no shell variables or `$(...)` substitutions) so it is
-easy to auto-approve. The script finds the repo root itself (it walks up from the
-current dir to the nearest `plans/`), so no `--root` is needed when you run it
-from inside the project. Substitute the absolute base directory you were told at
-load time for `<skill-dir>` — do not leave the angle brackets, do not guess a
-cwd-relative path (use `${CLAUDE_PLUGIN_ROOT}/skills/status-board` if you prefer
-the env var, but still write a single literal command):
+**single, plain command** (no shell variables or `$(...)` substitutions) so the
+plugin's bundled auto-approve hook can match it. The script finds the repo root
+itself (it walks up from the current dir to the nearest `plans/`), so no `--root`
+is needed when you run it from inside the project. Substitute the **absolute**
+base directory you were told at load time for `<skill-dir>` and write that real
+path **literally** — do NOT write `${CLAUDE_PLUGIN_ROOT}` or any shell variable in
+the command (the auto-approve hook matches the expanded literal path, so a
+variable would defeat it and re-trigger a prompt). Do not leave the angle
+brackets; do not guess a cwd-relative path:
 
 ```bash
 python3 "<skill-dir>/scripts/status_board.py" --scope full

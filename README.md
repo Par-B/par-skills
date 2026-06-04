@@ -24,6 +24,12 @@ lifecycle state (in flight, designed-not-started, future ideas, last-2-done,
 last-2-won't-do). Bootstraps the `plans/` convention if it's missing. Invoked as
 `/par-tools:status-board`, or naturally via "show me the status".
 
+**Auto-approval:** the plugin ships a `PreToolUse` hook (`plugins/par-tools/hooks/hooks.json`)
+that auto-approves *only* its own read-only render script, so the board never
+prompts on every view. You consent to it once, at plugin install/trust time —
+nothing is hand-edited into your settings. The skill's write actions (the
+`plans/` bootstrap) are deliberately **not** covered and still prompt.
+
 ## Layout
 
 ```text

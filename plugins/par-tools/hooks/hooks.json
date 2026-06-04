@@ -1,0 +1,22 @@
+{
+  "description": "Auto-approve par-tools' own read-only status-board render script. Scoped via `if` to ONLY this bundled scanner (any --scope arg); never touches other commands. The plugin's write actions (bootstrap mkdir/cp) are deliberately NOT covered and still prompt. User consent is granted at plugin install/trust time.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(python3 \"${CLAUDE_PLUGIN_ROOT}/skills/status-board/scripts/status_board.py\":*)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"par-tools read-only status-board render\"}}'"
+          },
+          {
+            "type": "command",
+            "if": "Bash(python3 ${CLAUDE_PLUGIN_ROOT}/skills/status-board/scripts/status_board.py:*)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"par-tools read-only status-board render\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}
