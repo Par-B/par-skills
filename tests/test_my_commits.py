@@ -148,3 +148,81 @@ def test_thousands_separator(tmp_path):
     assert rc == 0
     assert "+1,500" in out
     assert "**Total (1)**" in out
+
+
+def _run_args(root, *extra):
+    p = subprocess.run([sys.executable, SCRIPT, "--root", str(root), *extra],
+                       capture_output=True, text=True)
+    return p.returncode, p.stdout
+
+
+def test_past_n_days_inclusive(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "d1.txt", "a\n", "2026-06-02")
+    _commit(r, "d2.txt", "a\n", "2026-06-03")
+    _commit(r, "d3.txt", "a\n", "2026-06-04")
+    _commit(r, "old.txt", "a\n", "2026-06-01")          # outside last-3-days window
+    rc, out = _run_args(r, "--days", "3", "--now", "2026-06-04")
+    assert rc == 0
+    assert "| Day | Commits | Lines added | Lines deleted |" in out   # range view
+    assert "2026-06-02" in out and "2026-06-04" in out
+    assert "2026-06-01" not in out
+    assert "**Total** | **3**" in out
+
+
+def test_weeks_is_seven_days(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "edge.txt", "a\n", "2026-05-29")         # exactly 7 days incl. today -> in
+    _commit(r, "today.txt", "a\n", "2026-06-04")
+    _commit(r, "old.txt", "a\n", "2026-05-28")          # one day before window -> out
+    rc, out = _run_args(r, "--weeks", "1", "--now", "2026-06-04")
+    assert "2026-05-29" in out and "2026-05-28" not in out
+    assert "**Total** | **2**" in out
+
+
+def test_days_zero_is_error(tmp_path):
+    r = _repo(tmp_path)
+    rc, out = _run_args(r, "--days", "0", "--now", "2026-06-04")
+    assert rc != 0                                       # argparse ap.error
+
+
+def test_months_rolling_calendar(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "in.txt", "a\n", "2026-04-04")           # exactly 2 months back (incl) -> in
+    _commit(r, "out.txt", "a\n", "2026-04-03")          # one day before window -> out
+    _commit(r, "now.txt", "a\n", "2026-06-04")
+    rc, out = _run_args(r, "--months", "2", "--now", "2026-06-04")
+    assert rc == 0
+    assert "| Day | Commits | Lines added | Lines deleted |" in out
+    assert "2026-04-04" in out and "2026-04-03" not in out
+    assert "**Total** | **2**" in out
+
+
+def test_named_month_most_recent_last_year(tmp_path):
+    # In June 2026, "october" -> Oct 2025 (this year's October hasn't started).
+    r = _repo(tmp_path)
+    _commit(r, "oct.txt", "a\n", "2025-10-15")
+    _commit(r, "sep.txt", "a\n", "2025-09-30")          # before Oct -> out
+    _commit(r, "nov.txt", "a\n", "2025-11-01")          # after Oct -> out
+    rc, out = _run_args(r, "--month", "october", "--now", "2026-06-04")
+    assert "2025-10-15" in out
+    assert "2025-09-30" not in out and "2025-11-01" not in out
+    assert "**Total** | **1**" in out
+
+
+def test_named_month_with_year_full_month(tmp_path):
+    r = _repo(tmp_path)
+    _commit(r, "first.txt", "a\n", "2024-10-01")        # day 1 -> in
+    _commit(r, "last.txt", "a\n", "2024-10-31")         # last day -> in
+    _commit(r, "next.txt", "a\n", "2024-11-01")         # next month -> out
+    _commit(r, "prev.txt", "a\n", "2024-09-30")         # prev month -> out
+    rc, out = _run_args(r, "--month", "october 2024", "--now", "2026-06-04")
+    assert "2024-10-01" in out and "2024-10-31" in out
+    assert "2024-11-01" not in out and "2024-09-30" not in out
+    assert "**Total** | **2**" in out
+
+
+def test_bad_month_is_error(tmp_path):
+    r = _repo(tmp_path)
+    rc, out = _run_args(r, "--month", "notamonth", "--now", "2026-06-04")
+    assert rc != 0

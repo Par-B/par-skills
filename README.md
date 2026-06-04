@@ -23,7 +23,7 @@ Update later with `/plugin marketplace update par-plugins`.
 | Plugin | Invoke | What it does |
 |---|---|---|
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
-| `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a period (today / yesterday / this week / this month) as a table — per-commit for a day, per-day for a range, with line changes. |
+| `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
 
 ### Try it
 
@@ -42,6 +42,10 @@ phrases trigger the skill), or use the explicit `/plugin:skill` form.
 - "show me my commits yesterday"
 - "how many commits this week?"
 - "my commits this month"
+- "my commits over the past 30 days"
+- "commits in the last 2 weeks"
+- "how many commits in the past 3 months?"
+- "show me my commits in October 2024"
 
 ## ⚠️ Permissions & trust — please read before installing
 

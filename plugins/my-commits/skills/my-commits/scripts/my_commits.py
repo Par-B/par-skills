@@ -124,10 +124,68 @@ def render_range(commits):
     return "\n".join(rows)
 
 
+_MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july",
+                "august", "september", "october", "november", "december"]
+MONTH_NUM = {}
+for _i, _nm in enumerate(_MONTH_NAMES, 1):
+    MONTH_NUM[_nm] = _i          # full name
+    MONTH_NUM[_nm[:3]] = _i      # 3-letter abbrev
+
+
+def _next_month_first(y, m):
+    return datetime(y + 1, 1, 1) if m == 12 else datetime(y, m + 1, 1)
+
+
+def _last_day(y, m):
+    return (_next_month_first(y, m) - timedelta(days=1)).day
+
+
+def rolling_bounds(now, n_days):
+    """(since, until) for the last `n_days` calendar days, inclusive of today."""
+    start_today = datetime(now.year, now.month, now.day)
+    return start_today - timedelta(days=n_days - 1), start_today + timedelta(days=1)
+
+
+def subtract_months(dt, n):
+    """`dt` shifted back `n` calendar months, clamping the day to the target month."""
+    idx = dt.year * 12 + (dt.month - 1) - n
+    y, m = idx // 12, idx % 12 + 1
+    return datetime(y, m, min(dt.day, _last_day(y, m)))
+
+
+def parse_month(spec, now):
+    """Resolve a --month value to (since, until) for that calendar month, or None.
+
+    Accepts 'YYYY-MM', '<name> <year>' ('october 2024', 'oct 2024'), or a bare
+    name/abbrev ('october', 'oct'). The covered window is the whole calendar
+    month: day 1 through the last day. A bare name resolves to its most recent
+    occurrence: this year if that month has already started, otherwise last year."""
+    s = spec.strip().lower()
+    if len(s) == 7 and s[4] == "-" and s[:4].isdigit() and s[5:7].isdigit():
+        y, m = int(s[:4]), int(s[5:7])               # YYYY-MM
+        if not 1 <= m <= 12:
+            return None
+    else:
+        parts = s.split()
+        if len(parts) == 2 and parts[0] in MONTH_NUM and parts[1].isdigit() and len(parts[1]) == 4:
+            m, y = MONTH_NUM[parts[0]], int(parts[1])    # "<name> <year>"
+        else:
+            m = MONTH_NUM.get(s)                          # bare name
+            if not m:
+                return None
+            y = now.year if m <= now.month else now.year - 1
+    return datetime(y, m, 1), _next_month_first(y, m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
-    ap.add_argument("--period", choices=PERIODS, default="today")
+    sel = ap.add_mutually_exclusive_group()
+    sel.add_argument("--period", choices=PERIODS)
+    sel.add_argument("--days", type=int, help="rolling window: last N days, incl. today")
+    sel.add_argument("--weeks", type=int, help="rolling window: last N weeks (N*7 days)")
+    sel.add_argument("--months", type=int, help="rolling window: last N calendar months")
+    sel.add_argument("--month", help="a specific month: YYYY-MM or a name like 'october'")
     ap.add_argument("--now", default=None, help="YYYY-MM-DD override for 'today' (testing)")
     args = ap.parse_args()
 
@@ -146,10 +204,30 @@ def main():
         return 4
 
     now = datetime.strptime(args.now, "%Y-%m-%d").date() if args.now else date.today()
-    since, until = period_bounds(args.period, now)
-    commits = collect(args.root, email, since, until)
+    start_today = datetime(now.year, now.month, now.day)
+    is_range = True                            # everything below the day periods is per-day
 
-    print(render_day(commits) if args.period in DAY_PERIODS else render_range(commits))
+    if args.month is not None:
+        bounds = parse_month(args.month, now)
+        if not bounds:
+            ap.error(f"unrecognized --month: {args.month!r} (use YYYY-MM or a month name)")
+        since, until = bounds
+    elif args.months is not None:
+        if args.months < 1:
+            ap.error("--months must be >= 1")
+        since, until = subtract_months(start_today, args.months), start_today + timedelta(days=1)
+    elif args.weeks is not None or args.days is not None:
+        n_days = args.weeks * 7 if args.weeks is not None else args.days
+        if n_days < 1:
+            ap.error("--days/--weeks must be >= 1")
+        since, until = rolling_bounds(now, n_days)
+    else:
+        period = args.period or "today"
+        since, until = period_bounds(period, now)
+        is_range = period not in DAY_PERIODS
+
+    commits = collect(args.root, email, since, until)
+    print(render_range(commits) if is_range else render_day(commits))
     return 0
 
 
