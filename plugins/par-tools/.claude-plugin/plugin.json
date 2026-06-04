@@ -8,6 +8,5 @@
   },
   "homepage": "https://github.com/Par-B/par-skills",
   "repository": "https://github.com/Par-B/par-skills",
-  "license": "MIT",
-  "hooks": "./hooks/hooks.json"
+  "license": "MIT"
 }
