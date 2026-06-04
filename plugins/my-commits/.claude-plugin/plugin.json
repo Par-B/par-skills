@@ -1,7 +1,7 @@
 {
   "name": "my-commits",
   "description": "Report your commits in the current repo for a time period (today/yesterday/this week/this month) as a table",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": { "name": "Par Botes", "email": "par.botes@gmail.com" },
   "homepage": "https://github.com/Par-B/par-skills",
   "repository": "https://github.com/Par-B/par-skills",

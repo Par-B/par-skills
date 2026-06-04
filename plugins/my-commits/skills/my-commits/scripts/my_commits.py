@@ -85,8 +85,14 @@ def collect(root, email, since, until):
     return commits
 
 
-def lines(a, d):
-    return f"+{a:,} −{d:,}"   # thousands separators, e.g. +11,686 −1,476
+def added(n, bold=False):
+    s = f"+{n:,}"                        # thousands separators, e.g. +11,686
+    return f"🟢 **{s}**" if bold else f"🟢 {s}"
+
+
+def deleted(n, bold=False):
+    s = f"−{n:,}"                        # U+2212 minus, e.g. −1,476
+    return f"🔴 **{s}**" if bold else f"🔴 {s}"
 
 
 def esc(s):
@@ -94,12 +100,12 @@ def esc(s):
 
 
 def render_day(commits):
-    rows = ["| Commit | Lines |", "|---|---|"]
+    rows = ["| Commit | Added | Deleted |", "|---|---|---|"]
     ta = td = 0
     for c in commits:
         ta += c["add"]; td += c["dele"]
-        rows.append(f"| {c['hash'][:7]} {esc(c['subject'])} | {lines(c['add'], c['dele'])} |")
-    rows.append(f"| **Total ({len(commits)})** | **{lines(ta, td)}** |")
+        rows.append(f"| {c['hash'][:7]} {esc(c['subject'])} | {added(c['add'])} | {deleted(c['dele'])} |")
+    rows.append(f"| **Total ({len(commits)})** | {added(ta, True)} | {deleted(td, True)} |")
     return "\n".join(rows)
 
 
@@ -108,13 +114,13 @@ def render_range(commits):
     for c in commits:
         d = by_day.setdefault(c["date"], {"n": 0, "add": 0, "dele": 0})
         d["n"] += 1; d["add"] += c["add"]; d["dele"] += c["dele"]
-    rows = ["| Day | Commits | Lines |", "|---|---|---|"]
+    rows = ["| Day | Commits | Added | Deleted |", "|---|---|---|---|"]
     tn = ta = td = 0
     for day in sorted(by_day):
         d = by_day[day]
         tn += d["n"]; ta += d["add"]; td += d["dele"]
-        rows.append(f"| {day} | {d['n']} | {lines(d['add'], d['dele'])} |")
-    rows.append(f"| **Total** | **{tn}** | **{lines(ta, td)}** |")
+        rows.append(f"| {day} | {d['n']} | {added(d['add'])} | {deleted(d['dele'])} |")
+    rows.append(f"| **Total** | **{tn}** | {added(ta, True)} | {deleted(td, True)} |")
     return "\n".join(rows)
 
 
