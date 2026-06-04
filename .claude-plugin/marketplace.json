@@ -7,9 +7,9 @@
   "description": "Par's Claude Code plugin marketplace",
   "plugins": [
     {
-      "name": "par-tools",
-      "source": "./plugins/par-tools",
-      "description": "Par's personal Claude Code skills (status-board, ...)"
+      "name": "status-board",
+      "source": "./plugins/status-board",
+      "description": "Render your plans/ directory as a lifecycle status board (and bootstrap the convention)"
     }
   ]
 }
