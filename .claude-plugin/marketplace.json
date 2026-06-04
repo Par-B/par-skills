@@ -1,0 +1,15 @@
+{
+  "name": "par-plugins",
+  "owner": {
+    "name": "Par Botes",
+    "email": "par.botes@gmail.com"
+  },
+  "description": "Par's Claude Code plugin marketplace",
+  "plugins": [
+    {
+      "name": "par-tools",
+      "source": "./plugins/par-tools",
+      "description": "Par's personal Claude Code skills (status-board, ...)"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "par-tools",
+  "description": "Par's personal Claude Code skills",
+  "version": "0.1.0",
+  "author": {
+    "name": "Par Botes",
+    "email": "par.botes@gmail.com"
+  },
+  "homepage": "https://github.com/Par-B/par-skills",
+  "repository": "https://github.com/Par-B/par-skills",
+  "license": "MIT"
+}
