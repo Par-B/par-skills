@@ -39,6 +39,42 @@ If you'd rather not have a bundled auto-approval, delete
 `plugins/par-tools/hooks/hooks.json` before installing (or fork without it); the
 skill still works, you'll just be prompted to approve the render command.
 
+## Security
+
+The auto-approved script (`status_board.py`) is intentionally small and
+constrained so it's easy to vet:
+
+- **Standard library only** — imports just `argparse`, `os`, `re`, `sys`. No
+  third-party packages, no `pip install`.
+- **Read-only** — it reads `plans/` and prints a Markdown table. It never writes,
+  deletes, shells out, runs `eval`/`exec`, or makes network calls. (The skill's
+  `plans/` bootstrap that *does* create files is plain `mkdir`/`cp` run
+  separately, and is **not** auto-approved — it prompts.)
+
+**Audit it yourself** (should print nothing — no writes/network/exec):
+
+```bash
+F=plugins/par-tools/skills/status-board/scripts/status_board.py
+grep -nE "^(import|from) " "$F"      # expect only: argparse, os, re, sys
+grep -nE "open\([^)]*['\"][wax]|subprocess|os\.system|socket|urllib|requests|eval\(|exec\(|__import__|shutil|Popen" "$F"
+```
+
+**Run it sandboxed.** For a defense-in-depth posture, enable Claude Code's
+built-in sandbox so *every* Bash command (this script included) runs confined —
+no network and restricted filesystem writes by default. In `settings.json`:
+
+```json
+{ "sandbox": { "enabled": true } }
+```
+
+On Linux this uses `bubblewrap` (`bwrap` must be installed); on macOS it uses the
+system Seatbelt sandbox. This protects against all tool commands, not just this
+plugin — the right layer for the "scripts from unknown sources" concern.
+
+**Pin what you install.** The repo is public and versioned — review the exact
+commit before installing, and pin your marketplace to a tag/ref for immutability
+rather than tracking the moving default branch.
+
 ## Skills
 
 ### `status-board`

@@ -4,9 +4,25 @@
 One process, one tool round trip — independent of plan count. The folder tree is
 the source of truth; descriptions are enriched from plans/README.md notes, with
 a fallback to each plan file's title. Drift between folders and README is flagged.
-View only; never mutates plans.
 
+Usage:  status_board.py [--root DIR] [--scope full|active|next|ideas|done|wontdo]
 Exit codes: 0 = board rendered, 3 = no board found (caller should offer bootstrap).
+
+Security properties (for auditors — each is verifiable against the code below):
+  * Standard library only: imports argparse, os, re, sys. No third-party
+    packages, no dynamic imports.
+  * Read-only: every open() below uses the default read mode (see parse_readme
+    and fallback_desc). The script never writes, creates, deletes, or renames
+    anything on disk.
+  * No code execution: no subprocess / os.system / eval / exec / compile /
+    __import__. File contents are read as text and pattern-matched only — never
+    interpreted or run.
+  * No network: no sockets, no urllib/http, no outbound calls of any kind.
+  * Bounded I/O: the only inputs are the --root/--scope CLI args and files under
+    <root>/plans/. The only output is the Markdown table (or the "NO_BOARD"
+    sentinel) printed to stdout. Nothing outside <root>/plans/ is read.
+  * No ReDoS: every regex is a simple linear pattern over single character
+    classes; inputs are local files, not attacker-controlled streams.
 """
 import argparse
 import os
@@ -42,6 +58,7 @@ MAX_DESC = 150
 
 
 def stem(name):
+    """Filename without its trailing '.md' (plans are keyed/displayed by stem)."""
     return name[:-3] if name.endswith(".md") else name
 
 
@@ -50,6 +67,7 @@ def brace_expand(token):
 
     An empty option (the `,}` in `foo-{x,}.md`) is the author's shorthand for
     "drop this segment", so the preceding separator is stripped too -> foo.md.
+    Pure string manipulation — no filesystem or shell involvement.
     """
     m = re.search(r"\{([^}]*)\}", token)
     if not m:
@@ -64,6 +82,8 @@ def brace_expand(token):
 
 
 def clean(text):
+    """Normalize a description: strip markdown emphasis and a leading 'Future:'
+    prefix, collapse whitespace, and truncate to MAX_DESC chars. Text in/text out."""
     text = re.sub(r"[`*]", "", text)
     text = FUTURE_PREFIX_RE.sub("", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -73,6 +93,10 @@ def clean(text):
 
 
 def plan_files(d):
+    """Sorted *.md plan files in dir `d`, excluding README.md and *.tasks.json.
+
+    Read-only directory listing. Returns [] if `d` is missing or unreadable
+    (OSError swallowed) so a partial/locked tree degrades instead of crashing."""
     try:
         entries = os.listdir(d)
     except OSError:                       # missing dir or no read permission
@@ -84,14 +108,18 @@ def plan_files(d):
 
 
 def date_sort_key(fname):
+    """Sort key for 'newest first' by YYYY-MM-DD filename prefix; undated last."""
     m = DATE_RE.match(fname)
     return (0, "") if not m else (1, m.group(1))
 
 
 def parse_readme(path):
-    """Return (notes{stem:note}, documented_stems, table_stems)."""
+    """Read plans/README.md (read-only) and extract, by pure text parsing:
+      notes{stem:note}, documented_stems (mentioned anywhere), table_stems
+      (rows that define a plan). File contents are never executed."""
     notes, documented, table = {}, set(), set()
     try:
+        # Read-only: parse the README as text. Contents are pattern-matched only.
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
@@ -133,8 +161,10 @@ def parse_readme(path):
 
 
 def fallback_desc(path):
-    """First non-generic heading; else first prose line."""
+    """Derive a one-line description from a plan file (read-only): its first
+    non-generic heading, else its first prose line. Contents parsed as text only."""
     try:
+        # Read-only: read the plan file to pull a human title. Never executed.
         with open(path, encoding="utf-8", errors="replace") as fh:
             lines = [ln.rstrip() for ln in fh]
     except OSError:
@@ -155,6 +185,8 @@ def fallback_desc(path):
 
 
 def describe(fname, dir_path, notes):
+    """One-line description for a plan: its README note if present, else a title
+    pulled from the file itself (read-only via fallback_desc)."""
     s = stem(fname)
     if s in notes:
         return notes[s]
@@ -162,6 +194,7 @@ def describe(fname, dir_path, notes):
 
 
 def esc(s):
+    """Neutralize characters that would break a Markdown table cell."""
     return s.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
 
 
@@ -169,8 +202,8 @@ def find_root(start):
     """Walk up from `start` to the nearest dir containing a `plans/` subdir.
 
     Lets the script be called with no --root: invoked from anywhere inside a
-    project, it locates the board itself. Falls back to `start` if none found.
-    """
+    project, it locates the board itself. Read-only path checks only; falls back
+    to `start` if none found."""
     d = os.path.abspath(start)
     while True:
         if os.path.isdir(os.path.join(d, "plans")):
@@ -182,6 +215,9 @@ def find_root(start):
 
 
 def main():
+    """Parse args, locate <root>/plans/, and print the in-scope sections (plus a
+    drift section for full scope) as one Markdown table on stdout. Read-only:
+    returns an exit code and performs no filesystem writes."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=None)
     ap.add_argument("--scope", default="full", choices=list(SCOPES))
