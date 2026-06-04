@@ -138,18 +138,32 @@ persistently in your `settings.json`:
 Installs and `/plugin marketplace update` then stay on `v1.0.0` until you change
 the ref.
 
-## Recommended permissions
+## Recommended permissions (optional · unrelated to the skills)
 
-A conservative, **secret-free and path-free** baseline of Claude Code permissions
-lives in [`recommended-permissions.json`](recommended-permissions.json). It's a
-hand-copied template — there is no "import a permissions file" command.
+> **This has nothing to do with the skills.** It is **not** required by, bundled
+> with, or installed alongside `status-board` / `my-commits` or the marketplace.
+> It's a standalone convenience: a sensible, safe baseline of Claude Code
+> **permission rules** you can adopt in *any* project. Use it even if you never
+> install a skill from here — or skip it entirely if you only came for the skills.
 
-**How to use:** open the file, copy the `permissions` object, and **merge** it
-into your own settings — `~/.claude/settings.json` (applies everywhere) or a
-project's `.claude/settings.json` (that repo only). If you already have a
-`permissions` block, *append* to the `allow`/`deny`/`ask` arrays rather than
-replacing them; drop the `_comment` key (strict JSON). Restart or reload Claude
-Code to apply. Precedence is **deny > ask > allow**.
+The baseline lives in
+[`recommended-permissions.json`](recommended-permissions.json) — a **secret-free,
+path-free** template. There's no "import a permissions file" command; you merge it
+into your own settings. Precedence is **deny > ask > allow**.
+
+**Two ways to apply it:**
+
+1. **Edit the file yourself.** Open `recommended-permissions.json`, copy the
+   `permissions` object, and merge it into `~/.claude/settings.json` (applies
+   everywhere) or a project's `.claude/settings.json` (that repo only). If you
+   already have a `permissions` block, *append* to the `allow`/`deny`/`ask` arrays
+   rather than replacing them; drop the `_comment` key (strict JSON).
+
+2. **Let Claude do it for you.** In a Claude Code session, say *"add these
+   permissions to `~/.claude/settings.json`"* and paste in the contents of
+   `recommended-permissions.json` — Claude will merge them into your settings.
+
+Either way, restart or reload Claude Code afterward to apply.
 
 **What the baseline grants (safe):** read-only inspection (`ls`, `cat`, `rg`,
 `grep`, `find`, `diff`, `jq`, …), scoped web (`WebSearch`, GitHub `WebFetch`),
