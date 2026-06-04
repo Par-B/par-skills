@@ -12,7 +12,7 @@ Add the marketplace once, then install the skills you want — each is a separat
 plugin, so install one or both:
 
 ```text
-/plugin marketplace add Par-B/par-skills
+/plugin marketplace add https://github.com/Par-B/par-skills
 /plugin install status-board@par-plugins
 /plugin install my-commits@par-plugins
 ```
