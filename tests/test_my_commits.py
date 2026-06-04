@@ -44,7 +44,7 @@ def test_today_per_commit_table(tmp_path):
     _commit(r, "b.txt", "x\n", "2026-06-04")                    # +1
     rc, out = _run(r, "today", "2026-06-04")
     assert rc == 0
-    assert "| Commit | Added | Deleted |" in out
+    assert "| Commit | Lines added | Lines deleted |" in out
     assert out.count("\n") >= 4               # header,sep,2 commits,total
     assert "**Total (2)**" in out
     assert "🟢 **+4**" in out                  # totals: 3+1 added
@@ -73,7 +73,7 @@ def test_week_per_day_table(tmp_path):
     _commit(r, "wed1.txt", "a\n", "2026-06-03")
     _commit(r, "wed2.txt", "a\n", "2026-06-03")
     rc, out = _run(r, "week", "2026-06-04")        # Thursday
-    assert "| Day | Commits | Added | Deleted |" in out
+    assert "| Day | Commits | Lines added | Lines deleted |" in out
     assert "| 2026-06-01 | 1 |" in out
     assert "| 2026-06-03 | 2 |" in out
     assert "**Total** | **3**" in out
@@ -124,7 +124,7 @@ def test_month_period(tmp_path):
     _commit(r, "m2.txt", "a\n", "2026-06-04")
     _commit(r, "prev.txt", "a\n", "2026-05-30")   # previous month, excluded
     rc, out = _run(r, "month", "2026-06-04")
-    assert "| Day | Commits | Added | Deleted |" in out
+    assert "| Day | Commits | Lines added | Lines deleted |" in out
     assert "**Total** | **2**" in out
 
 

@@ -100,7 +100,7 @@ def esc(s):
 
 
 def render_day(commits):
-    rows = ["| Commit | Added | Deleted |", "|---|---|---|"]
+    rows = ["| Commit | Lines added | Lines deleted |", "|---|---|---|"]
     ta = td = 0
     for c in commits:
         ta += c["add"]; td += c["dele"]
@@ -114,7 +114,7 @@ def render_range(commits):
     for c in commits:
         d = by_day.setdefault(c["date"], {"n": 0, "add": 0, "dele": 0})
         d["n"] += 1; d["add"] += c["add"]; d["dele"] += c["dele"]
-    rows = ["| Day | Commits | Added | Deleted |", "|---|---|---|---|"]
+    rows = ["| Day | Commits | Lines added | Lines deleted |", "|---|---|---|---|"]
     tn = ta = td = 0
     for day in sorted(by_day):
         d = by_day[day]

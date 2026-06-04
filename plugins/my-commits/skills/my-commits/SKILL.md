@@ -38,11 +38,11 @@ Read the output:
 
 ## What it shows
 
-- today / yesterday → one row per commit (`Commit | Added | Deleted`), oldest
-  first, with a **Total** row last.
-- this week / this month → one row per day (`Day | Commits | Added | Deleted`),
+- today / yesterday → one row per commit (`Commit | Lines added | Lines deleted`),
   oldest first, with a **Total** row last.
-- Added/Deleted are separate columns with thousands separators, prefixed 🟢 / 🔴.
+- this week / this month → one row per day
+  (`Day | Commits | Lines added | Lines deleted`), oldest first, **Total** last.
+- Lines added/deleted are separate columns with thousands separators, prefixed 🟢 / 🔴.
 
 ## Out of scope
 
