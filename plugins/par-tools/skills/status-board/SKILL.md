@@ -28,28 +28,26 @@ X plan", use `full` and point the user at the matching row.
 
 ### Fast path (preferred): the bundled script
 
-Use it when a Bash shell **and** a Python 3 interpreter are available. The script
-is next to this `SKILL.md` at `scripts/status_board.py`. Substitute the absolute
-base directory you were told at load time for the `<...>` placeholder (do not
-leave the angle brackets, do not guess a cwd-relative path):
+Use it when a Bash shell **and** a Python 3 interpreter are available. Run it as a
+**single, plain command** (no shell variables or `$(...)` substitutions) so it is
+easy to auto-approve. The script finds the repo root itself (it walks up from the
+current dir to the nearest `plans/`), so no `--root` is needed when you run it
+from inside the project. Substitute the absolute base directory you were told at
+load time for `<skill-dir>` — do not leave the angle brackets, do not guess a
+cwd-relative path (use `${CLAUDE_PLUGIN_ROOT}/skills/status-board` if you prefer
+the env var, but still write a single literal command):
 
 ```bash
-SKILL_DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/skills/status-board}"
-SKILL_DIR="${SKILL_DIR:-<absolute dir this SKILL.md was loaded from>}"
-PY="$(command -v python3 || command -v python)"
-if [ -n "$PY" ]; then
-  "$PY" "$SKILL_DIR/scripts/status_board.py" \
-    --root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" --scope full
-else echo "NO_PYTHON"; fi
+python3 "<skill-dir>/scripts/status_board.py" --scope full
 ```
 
-The single command above both detects the interpreter and runs the script, so the
-check costs no extra round trip. Read its output:
+Read its output:
 
 - A Markdown table → **relay it verbatim**. Do not re-read plan files, reformat,
   summarize, or truncate it.
 - `NO_BOARD` (exit 3) → go to **Bootstrap**.
-- `NO_PYTHON` → use the **Portable fallback** below.
+- `command not found` → retry once with `python` instead of `python3`; if that
+  also fails, use the **Portable fallback** below.
 
 ### Portable fallback: your own tools
 

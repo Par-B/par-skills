@@ -165,13 +165,29 @@ def esc(s):
     return s.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
 
 
+def find_root(start):
+    """Walk up from `start` to the nearest dir containing a `plans/` subdir.
+
+    Lets the script be called with no --root: invoked from anywhere inside a
+    project, it locates the board itself. Falls back to `start` if none found.
+    """
+    d = os.path.abspath(start)
+    while True:
+        if os.path.isdir(os.path.join(d, "plans")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return os.path.abspath(start)
+        d = parent
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=None)
     ap.add_argument("--scope", default="full", choices=list(SCOPES))
     args = ap.parse_args()
 
-    root = args.root or os.getcwd()
+    root = args.root or find_root(os.getcwd())
     plans = os.path.join(root, "plans")
     readme = os.path.join(plans, "README.md")
     if not os.path.isdir(plans) or not os.path.isfile(readme):
