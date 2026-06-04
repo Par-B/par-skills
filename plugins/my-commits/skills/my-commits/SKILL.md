@@ -30,7 +30,9 @@ last year).
 
 Substitute the **absolute** base directory you were told at load time for
 `<skill-dir>` and write it **literally** (no `${VAR}` — the auto-approve hook
-matches the expanded literal path). Run from inside the repo (git finds the root).
+matches on the script-path suffix `my-commits/scripts/my_commits.py`, so the
+command must contain the real resolved path; a variable would obscure it and
+re-trigger a prompt). Run from inside the repo (git finds the root).
 Use the argument from the table (example shows `--period today`):
 
 ```bash

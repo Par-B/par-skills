@@ -1,5 +1,5 @@
 {
-  "description": "Auto-approve the my-commits plugin's own read-only render script. Scoped via `if` to ONLY this scanner (any args). It shells out to READ-ONLY git (rev-parse/config/log). Write actions are not involved. Consent is granted at plugin install/trust time.",
+  "description": "Auto-approve the my-commits plugin's own read-only render script. Scoped via `if` to ONLY this scanner (any args); it shells out to READ-ONLY git (rev-parse/config/log). The `if` uses permission-rule syntax, where ${CLAUDE_PLUGIN_ROOT} is NOT expanded — so it anchors on a glob of the stable script-path suffix (`*my-commits/scripts/my_commits.py*`) instead of the install-/version-specific absolute path. Tradeoff: a suffix glob is slightly broader than a full-path anchor, but the matched script is read-only and never writes. Both `python3` and the `python` fallback are matched. Consent is granted at plugin install/trust time.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,12 +7,12 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(python3 \"${CLAUDE_PLUGIN_ROOT}/skills/my-commits/scripts/my_commits.py\":*)",
+            "if": "Bash(python3 *my-commits/scripts/my_commits.py*)",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"my-commits read-only git report\"}}'"
           },
           {
             "type": "command",
-            "if": "Bash(python3 ${CLAUDE_PLUGIN_ROOT}/skills/my-commits/scripts/my_commits.py:*)",
+            "if": "Bash(python *my-commits/scripts/my_commits.py*)",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"my-commits read-only git report\"}}'"
           }
         ]

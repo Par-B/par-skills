@@ -1,5 +1,5 @@
 {
-  "description": "Auto-approve the status-board plugin's own read-only render script. Scoped via `if` to ONLY this bundled scanner (any --scope arg); never touches other commands. The plugin's write actions (bootstrap mkdir/cp) are deliberately NOT covered and still prompt. User consent is granted at plugin install/trust time.",
+  "description": "Auto-approve the status-board plugin's own read-only render script. Scoped via `if` to ONLY this bundled scanner (any --scope arg); never touches other commands. The `if` uses permission-rule syntax, where ${CLAUDE_PLUGIN_ROOT} is NOT expanded — so it anchors on a glob of the stable script-path suffix (`*status-board/scripts/status_board.py*`) instead of the install-/version-specific absolute path. Tradeoff: a suffix glob is slightly broader than a full-path anchor, but the matched script is read-only; the plugin's write actions (bootstrap mkdir/touch/cp) are deliberately NOT covered and still prompt. Both `python3` and the `python` fallback are matched. User consent is granted at plugin install/trust time.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,12 +7,12 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(python3 \"${CLAUDE_PLUGIN_ROOT}/skills/status-board/scripts/status_board.py\":*)",
+            "if": "Bash(python3 *status-board/scripts/status_board.py*)",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"status-board read-only render\"}}'"
           },
           {
             "type": "command",
-            "if": "Bash(python3 ${CLAUDE_PLUGIN_ROOT}/skills/status-board/scripts/status_board.py:*)",
+            "if": "Bash(python *status-board/scripts/status_board.py*)",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"status-board read-only render\"}}'"
           }
         ]

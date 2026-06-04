@@ -35,9 +35,11 @@ itself (it walks up from the current dir to the nearest `plans/`), so no `--root
 is needed when you run it from inside the project. Substitute the **absolute**
 base directory you were told at load time for `<skill-dir>` and write that real
 path **literally** — do NOT write `${CLAUDE_PLUGIN_ROOT}` or any shell variable in
-the command (the auto-approve hook matches the expanded literal path, so a
-variable would defeat it and re-trigger a prompt). Do not leave the angle
-brackets; do not guess a cwd-relative path:
+the command. The auto-approve hook matches on the script-path **suffix**
+(`status-board/scripts/status_board.py`), so the command must contain that real,
+resolved path; a shell variable or `$(...)` would obscure the suffix and
+re-trigger a prompt. Do not leave the angle brackets; do not guess a cwd-relative
+path:
 
 ```bash
 python3 "<skill-dir>/scripts/status_board.py" --scope full

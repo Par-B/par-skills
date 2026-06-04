@@ -1,7 +1,7 @@
 {
   "name": "status-board",
   "description": "Render your plans/ directory as a lifecycle status board (and bootstrap the convention)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Par Botes",
     "email": "par.botes@gmail.com"
