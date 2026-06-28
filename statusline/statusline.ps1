@@ -66,8 +66,18 @@ if (Test-Path $settingsPath) {
     if ($s.effortLevel) { $effort = $s.effortLevel }
 }
 
+# ---- git branch ----
+$branch = ''
+$gitDir = if ($j.workspace.current_dir) { $j.workspace.current_dir } elseif ($j.cwd) { $j.cwd } else { $null }
+if ($gitDir -and (Test-Path $gitDir)) {
+    $branch = & git -C $gitDir rev-parse --abbrev-ref HEAD 2>$null
+    if ($LASTEXITCODE -ne 0 -or $branch -eq 'HEAD') { $branch = '' }
+}
+
 # ---- line 1 ----
-$line1  = "$blue$model$reset $dim|$reset "
+$line1  = "$blue$model$reset"
+if ($branch) { $line1 += " $dim⎇$reset $green$branch$reset" }
+$line1 += " $dim|$reset "
 $line1 += "$orange$(Format-Tokens $current) / $(Format-Tokens $size)$reset $dim|$reset "
 $line1 += "$green$pctUsed% used $orange$(Format-Number $current)$reset $dim|$reset "
 $line1 += "$cyan$pctRemain% remain $blue$(Format-Number ($size - $current))$reset $dim|$reset "
