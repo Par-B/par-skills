@@ -27,6 +27,23 @@ Update later with `/plugin marketplace update par-plugins`.
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
 
+### Windows note — emoji output & UTF-8
+
+Both scripts print emoji (status-board's 🔵/⚪/💡, my-commits' 🟢/🔴). On Windows,
+Python defaults stdout to the legacy **cp1252** codepage, which can't encode
+emoji — so a direct run can abort with
+`UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f535'`.
+
+Fix it once by enabling Python's UTF-8 mode for your user account, then open a new
+terminal:
+
+```powershell
+[Environment]::SetEnvironmentVariable('PYTHONUTF8','1','User')
+```
+
+(Per-run alternative: prefix the command with `PYTHONUTF8=1`.) Linux and macOS
+default to UTF-8, so this only affects Windows.
+
 ### Try it
 
 After installing, just talk to Claude naturally — no slash command needed (these
