@@ -21,6 +21,7 @@ $blue   = "$ESC[38;2;0;153;255m";  $orange = "$ESC[38;2;255;176;85m"
 $green  = "$ESC[38;2;0;160;0m";    $cyan   = "$ESC[38;2;46;149;153m"
 $red    = "$ESC[38;2;255;85;85m";  $yellow = "$ESC[38;2;230;200;0m"
 $white  = "$ESC[38;2;220;220;220m"; $dim   = "$ESC[2m"; $reset = "$ESC[0m"
+$purple = "$ESC[38;2;198;120;221m"; $violet = "$ESC[38;2;150;125;240m"
 
 function Format-Tokens([long]$n) {
     if     ($n -ge 1000000) { '{0:0.0}m' -f ($n / 1000000) }
@@ -49,6 +50,44 @@ function Format-Reset([string]$iso, [string]$style) {
     }
 }
 
+# Pure repo:branch — no `git` subprocess. Walks up to the repo root for the name,
+# then reads the branch straight out of .git/HEAD. Handles worktrees/submodules
+# (.git is a file), detached HEAD (short SHA), and slash-containing branch names.
+# Returns '' outside a repo.
+function Get-RepoBranch([string]$startDir) {
+    if (-not $startDir) { return '' }
+    $dir = $startDir
+    while ($dir) {
+        if (Test-Path (Join-Path $dir '.git')) { break }
+        $parent = Split-Path $dir -Parent
+        if (-not $parent -or $parent -eq $dir) { return '' }   # reached the filesystem root
+        $dir = $parent
+    }
+    $dotgit = Join-Path $dir '.git'
+    if (-not (Test-Path $dotgit)) { return '' }
+
+    $repo = Split-Path $dir -Leaf
+
+    if (Test-Path $dotgit -PathType Container) {
+        $gitdir = $dotgit
+    } else {
+        # ".git" is a file: "gitdir: <path>" (worktree / submodule)
+        $gitdir = ((Get-Content -Raw $dotgit).Trim()) -replace '^gitdir:\s*', ''
+        if (-not [System.IO.Path]::IsPathRooted($gitdir)) { $gitdir = Join-Path $dir $gitdir }
+    }
+
+    $headPath = Join-Path $gitdir 'HEAD'
+    if (-not (Test-Path $headPath)) { return $repo }
+
+    $head = (Get-Content -Raw $headPath).Trim()
+    if ($head -like 'ref:*') {
+        $branch = $head -replace '^ref:\s*', '' -replace '^refs/heads/', ''   # keeps slashes
+    } else {
+        $branch = $head.Substring(0, [math]::Min(7, $head.Length))            # detached → short SHA
+    }
+    return "${repo}:${branch}"
+}
+
 # ---- token math ----
 $size = [long]$j.context_window.context_window_size; if ($size -le 0) { $size = 200000 }
 $u = $j.context_window.current_usage
@@ -66,17 +105,12 @@ if (Test-Path $settingsPath) {
     if ($s.effortLevel) { $effort = $s.effortLevel }
 }
 
-# ---- git branch ----
-$branch = ''
-$gitDir = if ($j.workspace.current_dir) { $j.workspace.current_dir } elseif ($j.cwd) { $j.cwd } else { $null }
-if ($gitDir -and (Test-Path $gitDir)) {
-    $branch = & git -C $gitDir rev-parse --abbrev-ref HEAD 2>$null
-    if ($LASTEXITCODE -ne 0 -or $branch -eq 'HEAD') { $branch = '' }
-}
+# ---- repo:branch (pure — no git subprocess; reads .git/HEAD) ----
+$startDir = if ($j.workspace.current_dir) { $j.workspace.current_dir } elseif ($j.cwd) { $j.cwd } else { $PWD.Path }
+$repoBranch = Get-RepoBranch $startDir
 
 # ---- line 1 ----
 $line1  = "$blue$model$reset"
-if ($branch) { $line1 += " $dim⎇$reset $green$branch$reset" }
 $line1 += " $dim|$reset "
 $line1 += "$orange$(Format-Tokens $current) / $(Format-Tokens $size)$reset $dim|$reset "
 $line1 += "$green$pctUsed% used $orange$(Format-Number $current)$reset $dim|$reset "
@@ -130,6 +164,19 @@ if ($usage) {
         $line2 += "$sep${white}extra:$reset $(Build-Bar $exPct $bw) $cyan`$$exUsed/`$$exLimit$reset"
         $line3 += "$sep${white}resets $exReset$reset"
     }
+}
+
+# ---- repo:branch — right of the weekly bar on line 2 ----
+if ($repoBranch) {
+    if ($repoBranch -like '*:*') {
+        $ci = $repoBranch.IndexOf(':')
+        $rp = $repoBranch.Substring(0, $ci)
+        $br = $repoBranch.Substring($ci + 1)
+        $repoSeg = "$violet$rp${dim}:$reset$purple$br$reset"
+    } else {
+        $repoSeg = "$violet$repoBranch$reset"
+    }
+    if ($line2) { $line2 += "$sep$repoSeg" } else { $line2 = $repoSeg }   # usage down → alone on line 2
 }
 
 # ---- output ----

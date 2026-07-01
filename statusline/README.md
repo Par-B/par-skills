@@ -9,14 +9,14 @@ current: ●●●○○○○○○○ 28%   weekly: ●●●●●○○○�
 resets 3:00pm            resets aug 4, 9:00am      resets sep 1
 ```
 
-- **Line 1** — model · git branch (Windows `.ps1` only) · context tokens used/total · % used · % remaining · "always thinking" on/off · effort level.
-- **Lines 2–3** — plan-usage bars + reset times: current 5-hour window, 7-day weekly, and extra/overage (if enabled). The `.sh` version appends `repo:branch` to the right of line 2 (read straight from `.git/HEAD` — no `git` subprocess; blank outside a repo).
+- **Line 1** — model · context tokens used/total · % used · % remaining · "always thinking" on/off · effort level.
+- **Lines 2–3** — plan-usage bars + reset times: current 5-hour window, 7-day weekly, and extra/overage (if enabled). Both the `.sh` and `.ps1` versions append `repo:branch` to the right of line 2 (read straight from `.git/HEAD` — no `git` subprocess; blank outside a repo).
 
 | File | Platform | Shows | Needs |
 |------|----------|-------|-------|
 | `statusline.sh` | macOS / Linux / WSL | all 3 lines **+ repo:branch** | `jq`, `curl`; your Claude token |
 | `statusline-line1.sh` | macOS / Linux / WSL | **line 1 only** (no credentials, no network) | `jq` |
-| `statusline.ps1` | Windows | all 3 lines **+ git branch** | PowerShell 7 + Windows Terminal |
+| `statusline.ps1` | Windows | all 3 lines **+ repo:branch** | PowerShell 7 + Windows Terminal |
 
 The `settings.json` lives at `~/.claude/settings.json` (macOS/Linux) or `%USERPROFILE%\.claude\settings.json` (Windows). Add a `statusLine` block alongside any existing keys — don't replace the file.
 
@@ -62,7 +62,7 @@ Only needs `jq`.
 - Use the **full path to `pwsh.exe`** (quoted, as above) rather than a bare `pwsh`. On many machines `pwsh` also resolves to the Microsoft Store *App Execution Alias* in `WindowsApps\`, which can fail to launch non-interactively.
 - Use `pwsh` (PowerShell 7), **not** Windows PowerShell 5.1 — 5.1 has weak ANSI/UTF-8 and the colors/bars may not render.
 - It assumes the token is at `%USERPROFILE%\.claude\.credentials.json`. If Claude Code stores it elsewhere, lines 2–3 silently won't show; **line 1 always works**.
-- The git-branch segment (dimmed `⎇` + branch name) reads the repo at the workspace dir Claude Code passes in, and shows nothing when you're not in a git repo. Verified on Windows 11 + PowerShell 7.6 + Windows Terminal.
+- The `repo:branch` segment (right of line 2) resolves the repo at the workspace dir Claude Code passes in by reading `.git/HEAD` directly — no `git` process is spawned — and shows nothing when you're not in a git repo.
 
 ## How it works / privacy
 
