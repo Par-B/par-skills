@@ -5,16 +5,16 @@ A custom status line for Claude Code, in three flavors. Pick one, save it, point
 
 ```
 Sonnet 4.6 | 32k / 200k | 16% used 32,140 | 84% remain 167,860 | thinking: On | effort: high
-current: ●●●○○○○○○○ 28%   weekly: ●●●●●○○○○○ 47%   extra: ●○○○○○○○○○ $1.20/$50.00
+current: ●●●○○○○○○○ 28%   weekly: ●●●●●○○○○○ 47%   extra: ●○○○○○○○○○ $1.20/$50.00   my-repo:main
 resets 3:00pm            resets aug 4, 9:00am      resets sep 1
 ```
 
 - **Line 1** — model · git branch (Windows `.ps1` only) · context tokens used/total · % used · % remaining · "always thinking" on/off · effort level.
-- **Lines 2–3** — plan-usage bars + reset times: current 5-hour window, 7-day weekly, and extra/overage (if enabled).
+- **Lines 2–3** — plan-usage bars + reset times: current 5-hour window, 7-day weekly, and extra/overage (if enabled). The `.sh` version appends `repo:branch` to the right of line 2 (read straight from `.git/HEAD` — no `git` subprocess; blank outside a repo).
 
 | File | Platform | Shows | Needs |
 |------|----------|-------|-------|
-| `statusline.sh` | macOS / Linux / WSL | all 3 lines | `jq`, `curl`; your Claude token |
+| `statusline.sh` | macOS / Linux / WSL | all 3 lines **+ repo:branch** | `jq`, `curl`; your Claude token |
 | `statusline-line1.sh` | macOS / Linux / WSL | **line 1 only** (no credentials, no network) | `jq` |
 | `statusline.ps1` | Windows | all 3 lines **+ git branch** | PowerShell 7 + Windows Terminal |
 

@@ -24,6 +24,8 @@ cyan="${e}[38;2;46;149;153m"
 red="${e}[38;2;255;85;85m"
 yellow="${e}[38;2;230;200;0m"
 white="${e}[38;2;220;220;220m"
+purple="${e}[38;2;198;120;221m"
+violet="${e}[38;2;150;125;240m"
 dim="${e}[2m"
 reset="${e}[0m"
 
@@ -69,6 +71,42 @@ pad_column() {
     printf '%s' "$text"
     if (( padding > 0 )); then
         printf '%*s' "$padding" ""
+    fi
+}
+
+# Pure-bash repo:branch — no `git` subprocess. Walks up to the repo root for the
+# name, then reads the branch straight out of .git/HEAD ($(<file) doesn't fork).
+# Handles worktrees/submodules (.git is a file), detached HEAD (short SHA), and
+# slash-containing branch names (feat/foo). Prints nothing outside a repo.
+git_repo_branch() {
+    local dir=$1 gitdir head ref repo branch line
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        [[ -e "$dir/.git" ]] && break
+        dir=${dir%/*}
+    done
+    [[ -e "$dir/.git" ]] || return
+
+    repo=${dir##*/}
+
+    if [[ -d "$dir/.git" ]]; then
+        gitdir="$dir/.git"
+    else
+        line=$(<"$dir/.git")                 # "gitdir: <path>"
+        gitdir=${line#gitdir: }
+        [[ "$gitdir" != /* ]] && gitdir="$dir/$gitdir"
+    fi
+
+    if [[ -r "$gitdir/HEAD" ]]; then
+        head=$(<"$gitdir/HEAD")
+        if [[ "$head" == "ref: "* ]]; then
+            ref=${head#ref: }
+            branch=${ref#refs/heads/}        # keeps slashes intact
+        else
+            branch=${head:0:7}               # detached HEAD → short SHA
+        fi
+        printf '%s:%s' "$repo" "$branch"
+    else
+        printf '%s' "$repo"
     fi
 }
 
@@ -260,6 +298,23 @@ if [[ -n "$usage_data" ]]; then
 
     line3="${col1_reset_colored}${sep}${col2_reset_colored}"
     [[ -n "$col3_reset_colored" ]] && line3+="${sep}${col3_reset_colored}"
+fi
+
+# ===== repo:branch — to the right of the weekly bar on line 2 =====
+cwd=$(printf '%s' "$input_text" | jq -r '.workspace.current_dir // .cwd // empty')
+[[ -z "$cwd" ]] && cwd=$PWD
+repo_branch=$(git_repo_branch "$cwd")
+if [[ -n "$repo_branch" ]]; then
+    if [[ "$repo_branch" == *:* ]]; then
+        repo_seg="${violet}${repo_branch%%:*}${dim}:${reset}${purple}${repo_branch#*:}${reset}"
+    else
+        repo_seg="${violet}${repo_branch}${reset}"
+    fi
+    if [[ -n "$line2" ]]; then
+        line2+="${sep}${repo_seg}"          # after weekly (and extra, if shown)
+    else
+        line2="${repo_seg}"                 # usage unavailable → repo:branch alone on line 2
+    fi
 fi
 
 # Output
