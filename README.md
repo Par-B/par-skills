@@ -221,6 +221,44 @@ trust):
 (Shown as `jsonc` with comments for readability — strip the comments when pasting
 into strict-JSON `settings.json`.)
 
+## Recommended companion plugin — superpowers
+
+Not part of this marketplace, but recommended: **superpowers**, a planning-and-
+workflow skill framework (brainstorming → writing-plans → executing-plans, plus
+debugging / TDD / verification skills). It replaces ad-hoc "just start coding"
+with a structured, design-first flow.
+
+- **Source:** GitHub **[`pcvelz/superpowers`](https://github.com/pcvelz/superpowers)**
+  (the `superpowers-extended-cc` variant). Add it like any marketplace:
+
+  ```text
+  /plugin marketplace add pcvelz/superpowers
+  /plugin install superpowers-extended-cc@superpowers-extended-cc-marketplace
+  ```
+
+  Update later with `/plugin marketplace update superpowers-extended-cc-marketplace`.
+
+### Permission note — deny `EnterPlanMode` when superpowers is installed
+
+superpowers uses its **own** planning flow, and its skills explicitly forbid
+Claude's **native** plan mode (`EnterPlanMode` / `ExitPlanMode`) — native plan mode
+traps the session and restricts the Write/Edit tools the workflow needs. To make
+that unambiguous at the *permission* layer — so the model can't fall back to native
+plan mode even if a skill instruction is missed — add `EnterPlanMode` to your
+`permissions.deny`:
+
+```json
+"permissions": {
+  "deny": [
+    "EnterPlanMode"
+  ]
+}
+```
+
+Merge this into the `deny` array you already have (don't replace it). This is the
+one permission tweak that's **tied to a plugin** — unlike the plugin-independent
+baseline above, only add it if you actually run superpowers' planning flow.
+
 ## Layout
 
 ```text
