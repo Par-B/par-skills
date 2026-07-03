@@ -18,6 +18,41 @@ def _detect(cwd, *args):
                           capture_output=True, text=True)
 
 
+def _skills(cwd, *args):
+    return subprocess.run([sys.executable, SCRIPT, "skills", "--cwd", str(cwd), *args],
+                          capture_output=True, text=True)
+
+
+def _mk_skill(root, rel, name, desc, body="Do the thing.\n"):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\nname: {name}\ndescription: {desc}\n---\n\n# {name}\n\n{body}")
+    return p
+
+
+def test_skills_finds_and_parses_frontmatter(tmp_path):
+    _mk_skill(tmp_path, "plugins/a/skills/a/SKILL.md", "alpha", "Use when alpha.")
+    _mk_skill(tmp_path, "plugins/b/skills/b/SKILL.md", "beta", "Use when beta.")
+    out = json.loads(_skills(tmp_path, "--json").stdout)["skills"]
+    by_name = {s["name"]: s for s in out}
+    assert set(by_name) == {"alpha", "beta"}
+    assert by_name["alpha"]["description"] == "Use when alpha."
+    assert by_name["alpha"]["words"] > 0
+
+
+def test_skills_excludes_noise_dirs(tmp_path):
+    _mk_skill(tmp_path, "plugins/real/skills/real/SKILL.md", "real", "Use when real.")
+    _mk_skill(tmp_path, "node_modules/pkg/SKILL.md", "vendored", "nope")
+    _mk_skill(tmp_path, ".git/weird/SKILL.md", "gitjunk", "nope")
+    names = {s["name"] for s in json.loads(_skills(tmp_path, "--json").stdout)["skills"]}
+    assert names == {"real"}          # vendored/.git skills are pruned
+
+
+def test_skills_empty_tree(tmp_path):
+    assert json.loads(_skills(tmp_path, "--json").stdout)["skills"] == []
+    assert "(no SKILL.md files found)" in _skills(tmp_path).stdout
+
+
 def test_detect_finds_project_file_and_its_imports(tmp_path):
     (tmp_path / "extra.md").write_text("more rules\n")
     (tmp_path / "CLAUDE.md").write_text("base\n@extra.md\n")

@@ -7,7 +7,8 @@ imported files load into context every session, so md-optimize treats them as
 in-scope (each optimized as its own file). A plain markdown link or a prose
 mention is NOT an import and is ignored.
 
-    detect [--cwd DIR] [--json]                # discover the whole scope
+    detect [--cwd DIR] [--json]                # discover instruction-file scope
+    skills [--cwd DIR] [--json]                # scan a repo tree for SKILL.md
     imports <file> [--json] [--max-depth N]   # default max-depth 5
 
 `detect` is the single, pre-approved way to discover scope — it finds every
@@ -197,6 +198,66 @@ def cmd_imports(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# Skill discovery (scan a repo tree for SKILL.md)
+# --------------------------------------------------------------------------- #
+SKILL_SCAN_EXCLUDE = {".git", "node_modules", ".venv", "venv", "dist", "build",
+                      "__pycache__", ".mypy_cache", ".tox", ".next", "cache"}
+
+
+def parse_frontmatter(text: str) -> dict:
+    """Light extraction of `name:`/`description:` from a SKILL.md YAML
+    frontmatter block (not a full YAML parser)."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+    out = {}
+    for line in text[3:end].splitlines():
+        m = re.match(r"\s*(name|description)\s*:\s*(.*)", line)
+        if m:
+            out[m.group(1)] = m.group(2).strip().strip("\"'")
+    return out
+
+
+def find_skill_files(root: str) -> list[str]:
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKILL_SCAN_EXCLUDE]
+        if "SKILL.md" in filenames:
+            found.append(os.path.realpath(os.path.join(dirpath, "SKILL.md")))
+    return sorted(set(found))
+
+
+def cmd_skills(args) -> int:
+    root = os.path.abspath(args.cwd or os.getcwd())
+    skills = []
+    for p in find_skill_files(root):
+        try:
+            text = open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        fm = parse_frontmatter(text)
+        skills.append({"path": p, "name": fm.get("name"),
+                       "description": fm.get("description"),
+                       "words": len(text.split()), "git": git_exposure(p)})
+    result = {"cwd": root, "skills": skills}
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+    if not skills:
+        print("(no SKILL.md files found)")
+        return 0
+    for s in skills:
+        g = s["git"]
+        exp = ("tracked+remote" if g["tracked"] and g["has_remote"]
+               else "tracked" if g["tracked"]
+               else "in-repo" if g["in_repo"] else "local-only")
+        print(f"{s['words']:>6} words  [{exp:<14}]  {s['name'] or '?':<20}  {s['path']}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Scope discovery for md-optimize.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -205,6 +266,11 @@ def main() -> int:
     s.add_argument("--cwd", help="project dir to scan (default: current dir)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_detect)
+
+    s = sub.add_parser("skills", help="scan a repo tree for SKILL.md files")
+    s.add_argument("--cwd", help="dir to scan (default: current dir)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_skills)
 
     s = sub.add_parser("imports", help="list @imported files, recursively")
     s.add_argument("file")
