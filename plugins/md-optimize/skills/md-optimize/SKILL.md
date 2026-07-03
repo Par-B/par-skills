@@ -16,22 +16,19 @@ anything, so any change is reversible later** — see "Undo / revert" below.
 **If the user is asking to undo or revert** a previous run rather than optimize,
 skip straight to the "Undo / revert" section.
 
-Two bundled helpers live under `<skill-dir>/scripts/` — write the **absolute**
-base directory you were told at load time in place of `<skill-dir>`:
+Two bundled helpers live under `<skill-dir>/scripts/` (substitute the
+**absolute** base dir you were told at load time for `<skill-dir>`):
 `md_optimize_history.py` (snapshot / undo / prune) and `md_optimize_scope.py`
 (**detect** scope + resolve `@imports`). **All file *discovery* goes through
 these pre-approved helpers — never improvise `ls`/`find`/`grep`/`git`.** Claude
-reads and edits file *contents* (which the user approves); the helpers do the
-finding, so a normal run needs no ad-hoc shell.
+reads and edits *contents* (which the user approves); the helpers do the finding.
 
-**Always ask via a selectable list.** Every time this skill needs a decision
-from the user — scope choices, per-finding actions, yes/no confirmations, which
-run to restore — present it with the **AskUserQuestion** tool so they arrow
-through options and press Enter, never by asking them to type a reply. Put the
-recommended option first and spell out "(recommended)" in its label. The tool
-always also offers **Other** (free text), which covers "let me type / discuss."
-Only fall back to a plain typed prompt when the answer is genuinely free-form
-with no options to offer (e.g. asking for a file path when none was detected).
+**Always ask via a selectable list.** For every decision — scope, per-finding
+actions, confirmations, which run to restore — use **AskUserQuestion**
+(recommended option first, labeled "(recommended)"); never make the user type.
+Its built-in **Other** covers "let me type / discuss." Fall back to a typed
+prompt only for a genuinely free-form answer (e.g. a file path when none was
+detected).
 
 ## Phase 0 — Detect scope and read the file(s)
 
@@ -40,9 +37,9 @@ with no options to offer (e.g. asking for a file path when none was detected).
 end of this phase). Otherwise optimize **instruction files** with the default
 flow that follows.
 
-**Discover with the bundled detector — never with ad-hoc `ls`/`find`/`grep`/
-`git`.** One pre-approved call returns every instruction file that exists, its
-scope and git exposure, and its resolved `@imports`:
+**Discover with the bundled detector.** One pre-approved call returns every
+instruction file that exists, its scope and git exposure, and its resolved
+`@imports`:
 
 ```bash
 python3 "<skill-dir>/scripts/md_optimize_scope.py" detect --json
@@ -329,7 +326,8 @@ data, always show the dry-run and get confirmation before `--yes`.
 ## Principles
 
 - Enhance consistency and accuracy while preserving the file's core purpose.
-- Evidence over speculation — prefer findings grounded in this session.
+- Evidence over speculation — for instruction files, prefer findings grounded in
+  this session.
 - One change at a time; the user approves each before it lands.
 - Brevity never at the cost of meaning or coverage.
 - Files in scope stay separate — analyze and edit each on its own; surface
