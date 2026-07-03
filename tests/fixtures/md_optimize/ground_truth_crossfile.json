@@ -1,0 +1,39 @@
+{
+  "global": "global-CLAUDE.md",
+  "project": "project-CLAUDE.md",
+  "_note": "Cross-file (Lens C) answer key. Both files load into context together, so a project rule that restates a global one is wasted tokens, and a project rule that contradicts a global one is a conflict to flag (not auto-resolve). Each anchor is exact text in the file named by `file`.",
+  "defects": [
+    {
+      "id": "X1",
+      "lens": "cross-file",
+      "type": "duplication",
+      "file": "project",
+      "anchor": "Write concise commit messages.",
+      "related_global": "Write concise commit messages, in the imperative mood.",
+      "summary": "The project commit-message rule merely restates the global one; drop the project copy (global keeps it in effect)."
+    },
+    {
+      "id": "X2",
+      "lens": "cross-file",
+      "type": "conflict",
+      "file": "project",
+      "anchor": "Use tabs for indentation.",
+      "related_global": "Default to 2-space indentation.",
+      "summary": "Project indentation rule contradicts the global one; flag as a conflict (project wins by precedence) rather than silently cutting either."
+    }
+  ],
+  "invariants": [
+    {
+      "id": "P1",
+      "file": "project",
+      "anchor": "Run tests with `make test`.",
+      "summary": "Project-specific rule with no global equivalent; must survive."
+    },
+    {
+      "id": "G1",
+      "file": "global",
+      "anchor": "Never commit secrets.",
+      "summary": "Critical global rule; must survive."
+    }
+  ]
+}

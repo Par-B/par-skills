@@ -1,0 +1,41 @@
+{
+  "fixture": "privacy-CLAUDE.md",
+  "_note": "Lens D answer key. `defects` are sensitive items that should be flagged, tiered by severity — including the USER'S OWN name and contact info (a shared instructions file shouldn't necessarily carry it; the user decides via the choice menu). `benign` items carry no personal/confidential data and must NOT be flagged. Each anchor is exact text in the fixture.",
+  "defects": [
+    {
+      "id": "P1",
+      "tier": "critical",
+      "type": "secret",
+      "anchor": "sk-live-abc123DEF456ghi789",
+      "summary": "A live API key is embedded; also warn it must be rotated, not just deleted, since it's in git history."
+    },
+    {
+      "id": "P2",
+      "tier": "high",
+      "type": "internal_host",
+      "anchor": "db.internal.acme.corp",
+      "summary": "Internal production hostname exposed in the instructions file."
+    },
+    {
+      "id": "P3",
+      "tier": "high",
+      "type": "employee_contact",
+      "anchor": "jordan.lee@acme.example",
+      "summary": "Employee name plus contact information (email and phone)."
+    },
+    {
+      "id": "P4",
+      "tier": "high",
+      "type": "personal_contact",
+      "anchor": "par.botes@example.com",
+      "summary": "The user's own full name and contact email — identifying info that shouldn't be assumed safe to keep in a shared file; surface it for the user to keep/redact/remove."
+    }
+  ],
+  "benign": [
+    {
+      "id": "B1",
+      "anchor": "Prefer concise answers and cite sources.",
+      "summary": "A pure instruction with no personal or confidential data — must NOT be flagged."
+    }
+  ]
+}
