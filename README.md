@@ -27,7 +27,7 @@ Update later with `/plugin marketplace update par-plugins`.
 |---|---|---|
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
-| `md-optimize` | `/md-optimize:md-optimize` (or "optimize my CLAUDE.md") | Analyzes an AI-instructions file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`, global or project — plus any files it `@imports`) against the **current session** and interactively improves it through four lenses — effectiveness (contradictions, vague/inaccurate rules, gaps the session exposed), token efficiency (verbosity, redundancy, dead rules), cross-file overlap (a project or imported file duplicating/conflicting with a global one), and privacy (secrets, confidential info, and personal names/contact — including your own — flagged by exposure). Proposes changes one at a time; applies only the ones you approve, with a keep/redact/move/delete/acknowledge menu for privacy findings. **Snapshots every run before editing**, so you can undo/revert later ("undo my last md-optimize") and prune old history ("keep the last 10"). Ships snapshot/undo/prune and `@import`-resolver scripts; only its safe commands auto-approve (a scoped hook) — `restore`/`prune` always prompt, and edits are guarded to resolved `.md` files only. |
+| `md-optimize` | `/md-optimize:md-optimize` (or "optimize my CLAUDE.md") | Analyzes an AI-instructions file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`, global or project — plus any files it `@imports`) against the **current session** and interactively improves it through four lenses — effectiveness (contradictions, vague/inaccurate rules, gaps the session exposed), token efficiency (verbosity, redundancy, dead rules), cross-file overlap (a project or imported file duplicating/conflicting with a global one), and privacy (secrets, confidential info, and personal names/contact — including your own — flagged by exposure). Also scans a repo for **skill files** (`SKILL.md`) and optimizes chosen ones with a skill-authoring lens (`description`-as-triggers, no `@`-imports, concise body). Proposes changes one at a time; applies only the ones you approve, with a keep/redact/move/delete/acknowledge menu for privacy findings. **Snapshots every run before editing**, so you can undo/revert later ("undo my last md-optimize") and prune old history ("keep the last 10"). Ships snapshot/undo/prune and `@import`-resolver scripts; only its safe commands auto-approve (a scoped hook) — `restore`/`prune` always prompt, and edits are guarded to resolved `.md` files only. |
 
 ### Windows note — emoji output & UTF-8
 
@@ -158,10 +158,11 @@ all are stdlib-only. What each touches:
 **`md-optimize` — `md_optimize_scope.py`** (read-only)
 - Standard library only: `argparse`, `json`, `os`, `re`, `subprocess`, `sys`.
 - `detect` discovers which instruction files exist (global + project) and
-  resolves their `@imports` (recursive, depth-5, cycle-safe); `imports` does one
-  file. Shells out to **read-only git** only (`rev-parse`, `ls-files`,
-  `remote get-url`) to report exposure for privacy weighting; never writes,
-  deletes, or networks.
+  resolves their `@imports` (recursive, depth-5, cycle-safe); `skills` scans a
+  repo tree for `SKILL.md` files (excludes `.git`/`node_modules`/caches);
+  `imports` does one file. Shells out to **read-only git** only (`rev-parse`,
+  `ls-files`, `remote get-url`) to report exposure for privacy weighting; never
+  writes, deletes, or networks.
 
 **`md-optimize` — `hooks/approve_safe_commands.py`** (the auto-approval gate)
 - Standard library only: `json`, `shlex`, `sys`.
@@ -353,7 +354,7 @@ par-skills/                              marketplace "par-plugins"
         └── skills/md-optimize/
             ├── SKILL.md
             └── scripts/
-                ├── md_optimize_scope.py    detect scope + resolve @imports (read-only)
+                ├── md_optimize_scope.py    detect scope + scan skills + resolve @imports (read-only)
                 └── md_optimize_history.py  snapshot / undo / prune (writes to store)
 ```
 
