@@ -1,0 +1,83 @@
+{
+  "fixture": "messy-CLAUDE.md",
+  "transcript": "transcript.md",
+  "_note": "Each defect's `anchor` is an exact substring of the fixture, used by the deterministic consistency check. `lens` is the analysis lens the finding should come from. Invariants are correct rules that MUST survive optimization unchanged in meaning.",
+  "defects": [
+    {
+      "id": "E1",
+      "lens": "effectiveness",
+      "type": "contradiction",
+      "anchor": "Always use tabs for indentation.",
+      "summary": "Indentation is specified two contradictory ways (tabs vs 2 spaces); the transcript shows this caused a wrong edit.",
+      "evidence": "transcript: user says 'we use tabs' after a 2-space reindent"
+    },
+    {
+      "id": "E2",
+      "lens": "effectiveness",
+      "type": "ambiguity",
+      "anchor": "Format dates properly.",
+      "summary": "'Format dates properly' is vague; should specify ISO 8601 (YYYY-MM-DD).",
+      "evidence": "transcript: assistant wrote 07/02/2026, user wanted 2026-07-02"
+    },
+    {
+      "id": "E3",
+      "lens": "effectiveness",
+      "type": "missing_coverage",
+      "anchor": "you can run the unit tests",
+      "summary": "The file never states the actual test commands; the assistant had to guess. Should document `npm run test:unit` and `npm run test:e2e`.",
+      "evidence": "transcript: `npm test` failed with Missing script"
+    },
+    {
+      "id": "E4",
+      "lens": "effectiveness",
+      "type": "inaccurate",
+      "anchor": "This project targets Node 12.",
+      "summary": "Node 12 is stale/inaccurate; the project is on Node 20.",
+      "evidence": "transcript: user says 'we've been on Node 20 for over a year'"
+    },
+    {
+      "id": "T1",
+      "lens": "token",
+      "type": "verbosity",
+      "anchor": "which you are currently reading",
+      "summary": "The Overview paragraph is padded filler that can collapse to one short line with no loss of meaning.",
+      "evidence": null
+    },
+    {
+      "id": "T2",
+      "lens": "token",
+      "type": "redundancy",
+      "anchor": "Never commit secrets to the repository.",
+      "summary": "'Never commit secrets to the repository' is stated twice (Code Style and Security); one copy should be removed.",
+      "evidence": null
+    },
+    {
+      "id": "T3",
+      "lens": "token",
+      "type": "obsolete",
+      "anchor": "migrating off Bower",
+      "summary": "The Bower migration line is dead/obsolete and can be deleted.",
+      "evidence": null
+    },
+    {
+      "id": "T4",
+      "lens": "token",
+      "type": "prose_to_list",
+      "anchor": "To do various things in this project",
+      "summary": "The run-a-number-of-commands paragraph should be a compact bullet/table; it is also missing the actual commands (overlaps E3).",
+      "evidence": null
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I1",
+      "anchor": "Never force-push to main.",
+      "summary": "Critical safety rule; must remain in the optimized file."
+    },
+    {
+      "id": "I2",
+      "anchor": "npm run build:prod",
+      "summary": "Accurate build command; must remain in the optimized file."
+    }
+  ]
+}

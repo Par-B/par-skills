@@ -15,6 +15,11 @@
       "name": "my-commits",
       "source": "./plugins/my-commits",
       "description": "Report your commits in the current repo for a period (today/this week/...) as a table"
+    },
+    {
+      "name": "md-optimize",
+      "source": "./plugins/md-optimize",
+      "description": "Analyze a CLAUDE.md/AGENTS.md/GEMINI.md against the current session and interactively improve it for effectiveness and token efficiency"
     }
   ]
 }

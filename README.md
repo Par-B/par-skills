@@ -15,6 +15,7 @@ plugin, so install one or both:
 /plugin marketplace add https://github.com/Par-B/par-skills
 /plugin install status-board@par-plugins
 /plugin install my-commits@par-plugins
+/plugin install md-optimize@par-plugins
 ```
 
 Installed at user scope, a skill is available globally across all your projects.
@@ -26,6 +27,7 @@ Update later with `/plugin marketplace update par-plugins`.
 |---|---|---|
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
+| `md-optimize` | `/md-optimize:md-optimize` (or "optimize my CLAUDE.md") | Analyzes an AI-instructions file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`, global or project — plus any files it `@imports`) against the **current session** and interactively improves it through four lenses — effectiveness (contradictions, vague/inaccurate rules, gaps the session exposed), token efficiency (verbosity, redundancy, dead rules), cross-file overlap (a project or imported file duplicating/conflicting with a global one), and privacy (secrets, confidential info, and personal names/contact — including your own — flagged by exposure). Proposes changes one at a time; applies only the ones you approve, with a keep/redact/move/delete/acknowledge menu for privacy findings. **Snapshots every run before editing**, so you can undo/revert later ("undo my last md-optimize") and prune old history ("keep the last 10"). Ships snapshot/undo/prune and `@import`-resolver scripts; only its safe commands auto-approve (a scoped hook) — `restore`/`prune` always prompt, and edits are guarded to resolved `.md` files only. |
 
 ### Windows note — emoji output & UTF-8
 
@@ -66,35 +68,65 @@ phrases trigger the skill), or use the explicit `/plugin:skill` form.
 - "how many commits in the past 3 months?"
 - "show me my commits in October 2024"
 
+**`md-optimize`** (best run at the end of a working session, so it has history to learn from):
+- "optimize my CLAUDE.md"
+- "audit my global instructions"
+- "slim down this AGENTS.md"
+- "tune my CLAUDE.md based on this session"
+- "make my instructions more token-efficient"
+
 ## ⚠️ Permissions & trust — please read before installing
 
-Both skills here **auto-approve running their own bundled script** via a
-`PreToolUse` hook, so they don't prompt on every run:
+`status-board` and `my-commits` **auto-approve running their own bundled
+script** via a `PreToolUse` hook, so they don't prompt on every run:
 
 | Skill | Auto-approved script | What it touches |
 |---|---|---|
 | `status-board` | `skills/status-board/scripts/status_board.py` | reads your `plans/` dir, prints a table |
 | `my-commits` | `skills/my-commits/scripts/my_commits.py` | runs read-only git, prints a table |
 
-What this means (same for both):
+`md-optimize` auto-approves too, but **only its safe commands** — because its
+scripts include destructive operations that should always stop for confirmation.
+Its hook delegates to `hooks/approve_safe_commands.py`, which parses each command
+and approves only:
 
-- **No per-run prompt, and no separate "allow this script" prompt.** Your consent
-  is the **plugin install / trust step** — by installing and trusting a plugin you
-  accept that its bundled hook runs.
-- **Scope is tight.** Each hook auto-approves *only* its own script (any
-  arguments) — not all Python, not all Bash.
-- **Read-only.** Neither script writes, deletes, or makes network calls.
-- **Write actions still prompt.** `status-board`'s `plans/` bootstrap
-  (`mkdir`/`touch`/`cp`) is **not** auto-approved; `my-commits` never writes.
+| Auto-approved | Why it's safe |
+|---|---|
+| `md_optimize_scope.py` (any subcommand) | read-only scope discovery + `@import` resolver (so a run needs no ad-hoc `ls`/`git`) |
+| `md_optimize_history.py list` / `diff` / `acks` | read-only |
+| `md_optimize_history.py snapshot` / `ack` | write **only** into the store; run during a normal optimize |
+
+Deliberately **not** auto-approved — these still prompt:
+
+| Always prompts | Why |
+|---|---|
+| `md_optimize_history.py restore` | overwrites your instructions file |
+| `md_optimize_history.py prune` | deletes snapshots |
+| any command with `&&` / `;` / `\|` / redirection / substitution | can't smuggle a destructive tail behind a safe prefix |
+
+What this means:
+
+- **No per-run prompt for the safe commands.** Your consent is the **plugin
+  install / trust step** — installing and trusting a plugin accepts that its
+  bundled hook runs.
+- **Scope is tight.** `status-board`/`my-commits` hooks auto-approve *only* their
+  own read-only script; `md-optimize`'s hook auto-approves *only* its safe
+  subcommands (verified by `shlex` parsing, not a substring match).
+- **Destructive actions still prompt.** `status-board`'s `plans/` bootstrap
+  (`mkdir`/`touch`/`cp`) is not auto-approved; `my-commits` never writes; and
+  `md-optimize`'s file-overwriting `restore` and snapshot-deleting `prune` always
+  ask.
 
 To opt out of a skill's auto-approval, delete that plugin's `hooks/hooks.json`
 before installing (or fork without it); the skill still works — you'll just be
-prompted to approve its script each run.
+prompted to approve its commands each run.
 
 ## Security
 
-Both auto-approved scripts are small, dependency-light, and read-only, so they're
-easy to vet.
+`status-board` and `my-commits`'s auto-approved scripts are small,
+dependency-light, and read-only, so they're easy to vet. `md-optimize` ships two
+scripts (only its safe commands auto-approve — see above) plus the gating hook;
+all are stdlib-only. What each touches:
 
 **`status-board` — `status_board.py`**
 - Standard library only: `argparse`, `os`, `re`, `sys`. No third-party packages.
@@ -109,17 +141,51 @@ easy to vet.
 - Uses `git log --since-as-filter`, requiring **git ≥ 2.37** (July 2022); on older
   git a date window may drop commits whose author-date is out of order.
 
-**Audit either script yourself** — point `F` at whichever you're installing:
+**`md-optimize` — `md_optimize_history.py`** (safe subcommands auto-approve; `restore`/`prune` always prompt)
+- Standard library only: `argparse`, `difflib`, `json`, `os`, `re`, `subprocess`,
+  `sys`, `datetime`.
+- **Writes**, but only within a tight scope: copies of your instructions file
+  into `~/.claude/md-optimize/` (or `$MD_OPTIMIZE_HOME`) and, on `restore`, back
+  over the file you name. It snapshots the current state before every restore, so
+  restores are themselves undoable. `prune` deletes old snapshots inside the store
+  only (dry-run unless `--yes`) and never touches your instructions files.
+- **Path-guarded.** Every target is resolved (`realpath`, so symlinks and `..`
+  can't escape) and must be a `.md` file, and `prune` only ever deletes inside
+  the store — so the tool can't be pointed at a non-markdown file to overwrite it.
+- Shells out to **read-only git** only (`rev-parse`, `ls-files`) to record which
+  commit a file was at; never commits, pushes, fetches, or networks.
+
+**`md-optimize` — `md_optimize_scope.py`** (read-only)
+- Standard library only: `argparse`, `json`, `os`, `re`, `subprocess`, `sys`.
+- `detect` discovers which instruction files exist (global + project) and
+  resolves their `@imports` (recursive, depth-5, cycle-safe); `imports` does one
+  file. Shells out to **read-only git** only (`rev-parse`, `ls-files`,
+  `remote get-url`) to report exposure for privacy weighting; never writes,
+  deletes, or networks.
+
+**`md-optimize` — `hooks/approve_safe_commands.py`** (the auto-approval gate)
+- Standard library only: `json`, `shlex`, `sys`.
+- Reads the pending Bash command on stdin and prints an `allow` decision *only*
+  for the safe commands listed above; prints nothing otherwise. Refuses any
+  command containing shell chaining/redirection/substitution. Makes no changes
+  itself — it only decides whether to suppress a prompt.
+
+**Audit any script yourself** — point `F` at whichever you're installing:
 
 ```bash
 F=plugins/status-board/skills/status-board/scripts/status_board.py
 # F=plugins/my-commits/skills/my-commits/scripts/my_commits.py
+# F=plugins/md-optimize/skills/md-optimize/scripts/md_optimize_history.py   (writes: snapshot/restore/prune)
+# F=plugins/md-optimize/skills/md-optimize/scripts/md_optimize_scope.py     (read-only: @import resolver)
+# F=plugins/md-optimize/hooks/approve_safe_commands.py                      (auto-approval gate; decides only)
 grep -nE "^(import|from) " "$F"   # status_board: argparse/os/re/sys · my_commits: +subprocess/datetime
-grep -nE "open\([^)]*['\"][wax]|os\.system\(|socket\.|urllib\.|requests\.|eval\(|exec\(|__import__\(|shutil\.|Popen" "$F"  # both: prints nothing
+grep -nE "os\.system\(|socket\.|urllib\.|requests\.|eval\(|exec\(|__import__\(|Popen" "$F"  # prints nothing
 ```
 
-(`my-commits` imports `subprocess` to invoke read-only git — that's the one
-expected entry in the first command; it never uses `os.system`/`Popen`/network.)
+(`my-commits` and `md-optimize` import `subprocess` for **read-only git**; that's
+expected. `md-optimize` writes files by design — its whole job is snapshot/restore
+— so unlike the read-only pair it will show `open(..., "w"/"b")`; that's the
+backup/restore, scoped to the store and the file you name.)
 
 **Run it sandboxed.** For defense in depth, enable Claude Code's built-in sandbox
 so *every* Bash command runs confined — no network, restricted filesystem writes.
@@ -273,12 +339,22 @@ par-skills/                              marketplace "par-plugins"
     │       ├── SKILL.md
     │       ├── scripts/status_board.py  read-only scanner (auto-approved)
     │       └── references/readme-template.md
-    └── my-commits/
+    ├── my-commits/
+    │   ├── .claude-plugin/plugin.json
+    │   ├── hooks/hooks.json             auto-approves its git-report script
+    │   └── skills/my-commits/
+    │       ├── SKILL.md
+    │       └── scripts/my_commits.py    read-only git report (auto-approved)
+    └── md-optimize/
         ├── .claude-plugin/plugin.json
-        ├── hooks/hooks.json             auto-approves its git-report script
-        └── skills/my-commits/
+        ├── hooks/
+        │   ├── hooks.json               gates auto-approval to safe commands
+        │   └── approve_safe_commands.py decides: safe → allow, destructive → prompt
+        └── skills/md-optimize/
             ├── SKILL.md
-            └── scripts/my_commits.py    read-only git report (auto-approved)
+            └── scripts/
+                ├── md_optimize_scope.py    detect scope + resolve @imports (read-only)
+                └── md_optimize_history.py  snapshot / undo / prune (writes to store)
 ```
 
 Adding a new skill = a new `plugins/<skill>/` plugin plus an entry in
