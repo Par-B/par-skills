@@ -1,0 +1,16 @@
+{
+  "description": "Auto-approve ONLY md-optimize's safe helper commands so a normal optimize run isn't interrupted. Unlike the other plugins' single-glob hooks, this delegates to approve_safe_commands.py, which shlex-parses the command and approves only: md_optimize_scope.py (read-only @import resolver, any subcommand) and md_optimize_history.py list/diff/snapshot (list/diff read-only; snapshot writes only into the backup store). The destructive subcommands — restore (overwrites your instructions file) and prune (deletes snapshots) — are deliberately NOT approved and still prompt, as does any command with shell chaining/redirection/substitution. Consent is granted at plugin install/trust time; delete this file to opt out (the skill still works, you'll just approve each helper call).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_safe_commands.py\""
+          }
+        ]
+      }
+    ]
+  }
+}
