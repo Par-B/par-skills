@@ -31,8 +31,10 @@ depth-capped, `@` inside code blocks/spans and email addresses are not treated a
 imports, unresolvable tokens are ignored, and a non-markdown import
 (`@package.json`) is reported but not walked. For `detect` (scope discovery): it
 finds the project file and its imports, and reports git exposure (in-repo,
-tracked, has-remote) so Phase 0 needs no ad-hoc `ls`/`git`. Read-only, no LLM.
-Run with `pytest tests/test_md_optimize_scope.py`.
+tracked, has-remote) so Phase 0 needs no ad-hoc `ls`/`git`. For `skills` (repo
+scan): it finds `SKILL.md` files, parses their frontmatter `name`/`description`,
+and excludes `.git`/`node_modules`. Read-only, no LLM. Run with
+`pytest tests/test_md_optimize_scope.py`.
 
 ## md-optimize — auto-approval gate
 

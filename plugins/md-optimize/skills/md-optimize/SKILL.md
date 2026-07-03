@@ -1,6 +1,6 @@
 ---
 name: md-optimize
-description: Use when the user wants to optimize, improve, tune, audit, refine, or slim down an AI-instructions / system-prompt file — CLAUDE.md, AGENTS.md, or GEMINI.md, global or project — for effectiveness or token efficiency, e.g. "optimize my CLAUDE.md" or "tune my instructions based on this session"; also to undo, revert, or roll back a previous md-optimize run.
+description: Use when the user wants to optimize, improve, tune, audit, refine, or slim down an AI-instructions / system-prompt file (CLAUDE.md, AGENTS.md, GEMINI.md — global or project) or a skill file (SKILL.md), for effectiveness or token efficiency — e.g. "optimize my CLAUDE.md", "optimize the skills in this repo", or "tune my instructions based on this session"; also to undo, revert, or roll back a previous md-optimize run.
 ---
 
 # md-optimize
@@ -34,6 +34,11 @@ Only fall back to a plain typed prompt when the answer is genuinely free-form
 with no options to offer (e.g. asking for a file path when none was detected).
 
 ## Phase 0 — Detect scope and read the file(s)
+
+**Two modes.** If the request is about **skill files** — a `SKILL.md`, or
+"optimize my skills / the skills in this repo" — use **skill-file mode** (at the
+end of this phase). Otherwise optimize **instruction files** with the default
+flow that follows.
 
 **Discover with the bundled detector — never with ad-hoc `ls`/`find`/`grep`/
 `git`.** One pre-approved call returns every instruction file that exists, its
@@ -69,6 +74,20 @@ findings and edits are **labeled per file**, and you **never move a rule between
 files or merge them** without approval. Global, project, and imported files stay
 separate.
 
+**Skill-file mode.** Discover skills with the bundled scanner (read-only;
+excludes `.git`/`node_modules`/caches):
+
+```bash
+python3 "<skill-dir>/scripts/md_optimize_scope.py" skills --json
+```
+
+It returns each `SKILL.md` with its frontmatter `name`/`description`, word count,
+and git exposure. **Ask which to optimize** — present the found skills and use
+**AskUserQuestion** (multiSelect the skills; offer **All**). If more than 4 were
+found, ask "All or a subset?" then gather the subset. Analyze only the chosen
+skills, each as its own file, then continue to Phase 1 — where **Lens S** applies
+and **Lens A** judges skill-authoring quality (not session evidence).
+
 ## Phase 1 — Analysis
 
 Review the **current session's chat history** together with the file(s) in
@@ -76,6 +95,10 @@ scope, and find concrete improvements and risks through the lenses below (Lens C
 applies only when 2+ files are in scope; A, B, D always apply). Cite session
 evidence wherever a finding comes from an actual interaction, and apply every
 lens **per file**.
+
+**For a `SKILL.md`**, there's no session to cite — Lens A judges skill-authoring
+quality (clarity, correctness, coverage), **Lens S** (skill conventions) applies,
+and Lens C usually does not. Token and privacy lenses carry over unchanged.
 
 **Lens A — Effectiveness**
 - Inconsistencies in how the assistant responded across the session
@@ -137,6 +160,16 @@ python3 "<skill-dir>/scripts/md_optimize_history.py" acks "<file>"
 For any **Critical** finding, always add the caveat: editing the file does **not**
 remove the secret from git history — it must be **rotated/revoked** and the
 history purged. A redaction alone is false reassurance.
+
+**Lens S — Skill conventions** (only for `SKILL.md` files). Check against
+skill-authoring rules:
+- **`description` = when-to-use triggers only** — not a summary of the skill's
+  workflow. A workflow summary makes Claude act on the description and skip the
+  body; the description should be triggering conditions ("Use when …").
+- **No `@`-imports in a skill body** — they force-load and burn context; use
+  plain references instead.
+- **`name`** is kebab-case (letters/numbers/hyphens); the body is concise; and
+  discovery keywords (errors, symptoms, tools the user would search) are present.
 
 ## Phase 2 — Interaction
 
