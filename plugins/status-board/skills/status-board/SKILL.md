@@ -1,6 +1,6 @@
 ---
 name: status-board
-description: Use when the user asks to see project status, the status board, or what's in progress vs. done. Displays sub-projects organized by lifecycle status — active, not yet started, future ideas, recently finalized, and won't-do.
+description: Use when the user asks to see project status, the status board, what's in progress vs. done, or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do.
 ---
 
 # Status Board
@@ -28,18 +28,13 @@ X plan", use `full` and point the user at the matching row.
 
 ### Fast path (preferred): the bundled script
 
-Use it when a Bash shell **and** a Python 3 interpreter are available. Run it as a
-**single, plain command** (no shell variables or `$(...)` substitutions) so the
-plugin's bundled auto-approve hook can match it. The script finds the repo root
-itself (it walks up from the current dir to the nearest `plans/`), so no `--root`
-is needed when you run it from inside the project. Substitute the **absolute**
-base directory you were told at load time for `<skill-dir>` and write that real
-path **literally** — do NOT write `${CLAUDE_PLUGIN_ROOT}` or any shell variable in
-the command. The auto-approve hook matches on the script-path **suffix**
-(`status-board/scripts/status_board.py`), so the command must contain that real,
-resolved path; a shell variable or `$(...)` would obscure the suffix and
-re-trigger a prompt. Do not leave the angle brackets; do not guess a cwd-relative
-path:
+Use it when a Bash shell **and** Python 3 are available. Run it from inside the
+project (the script walks up to the nearest `plans/`, so no `--root`) as a
+**single, plain command**: substitute the **absolute** base directory you were
+told at load time for `<skill-dir>` and write it **literally**. No shell
+variables or `$(...)` — the auto-approve hook matches on the script-path
+**suffix** (`status-board/scripts/status_board.py`), so a `${VAR}` would obscure
+it and re-trigger a prompt:
 
 ```bash
 python3 "<skill-dir>/scripts/status_board.py" --scope full

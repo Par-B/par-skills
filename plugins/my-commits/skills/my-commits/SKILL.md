@@ -1,6 +1,6 @@
 ---
 name: my-commits
-description: Use when the user asks how many commits they've done (today, yesterday, this week, this month) or wants their recent git commit activity / line changes in the current repo.
+description: Use when the user asks how many commits they've done — today, yesterday, this week/month, the past N days/weeks/months, or a named month (e.g. October, October 2024) — or wants their recent git commit activity / line changes in the current repo.
 ---
 
 # My Commits

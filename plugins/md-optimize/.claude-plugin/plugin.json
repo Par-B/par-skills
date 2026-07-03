@@ -1,7 +1,7 @@
 {
   "name": "md-optimize",
   "description": "Analyze AI-instructions files (CLAUDE.md / AGENTS.md / GEMINI.md) or skill files (SKILL.md) and interactively apply improvements for effectiveness, token efficiency, and privacy, with durable snapshot/undo of every run",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": { "name": "Par Botes", "email": "par.botes@gmail.com" },
   "homepage": "https://github.com/Par-B/par-skills",
   "repository": "https://github.com/Par-B/par-skills",
