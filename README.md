@@ -4,7 +4,9 @@ Par's Claude Code plugin marketplace.
 
 This repo is a **marketplace** (`.claude-plugin/marketplace.json`, named
 `par-plugins`) of Claude Code skills. **Each skill is its own plugin**, so you
-install only the ones you want — à la carte, not all at once.
+install only the ones you want — à la carte, not all at once. It also ships a few
+standalone **slash commands** under [`commands/`](commands/) that you copy in
+directly (see [Commands](#commands-copy-in-not-plugins) below) rather than install.
 
 ## Install
 
@@ -74,6 +76,48 @@ phrases trigger the skill), or use the explicit `/plugin:skill` form.
 - "slim down this AGENTS.md"
 - "tune my CLAUDE.md based on this session"
 - "make my instructions more token-efficient"
+
+## Commands (copy-in, not plugins)
+
+Alongside the à-la-carte skill **plugins** above, the [`commands/`](commands/)
+directory holds standalone Claude Code **slash commands** — plain `.md` prompt
+templates. They are **not** installed through the marketplace; you copy the file
+you want into your own commands directory. Two scopes:
+
+- **All your repos:** copy into `~/.claude/commands/` (user scope).
+- **One repo only:** copy into that repo's `.claude/commands/`.
+
+Then invoke it with `/<name>`. (A project copy shadows the user copy when you're
+in that repo, so you can keep a repo-specific variant.)
+
+| Command | Invoke | What it does |
+|---|---|---|
+| `audit` | `/audit [optional path(s)]` | Read-only, multi-agent **correctness / concurrency / maintainability / performance** audit. Language-agnostic: it first detects the stack (manifest, frameworks, threading model, strict-safety settings), then dispatches the four dimensions to parallel subagents, cross-checks and de-duplicates their findings, and writes the **complete** set to `AUDIT_REPORT.md`. In chat it shows only the **prioritized top-10** (correctness/concurrency escalated to the top, each referencing its finding by `file:line`) plus a total count — ask to see them all, or filter by dimension/severity, and it surfaces the rest from the report. Never edits source. Pass path(s) to scope it (e.g. `/audit src/network`); otherwise it audits the primary sources and skips build output, dependencies, generated code, and fixtures.
+
+### Why `audit` is a command, not a skill
+
+This is a deliberate choice. A **skill** can be **auto-invoked** — Claude reads
+its description and may launch it on its own whenever it judges a task looks
+relevant, without you asking. A **command** can only ever run when you type
+`/audit` explicitly; nothing triggers it for you.
+
+That guard rail matters here because `/audit` isn't a cheap lookup — it **starts a
+workflow that coordinates many subagents in parallel** (one per dimension, each
+reading across the codebase, plus a synthesis pass). That fan-out can consume a
+**large amount of tokens** in a single run. You don't want a job that size kicking
+off automatically because a prompt happened to mention "check this code." Shipping
+it as a command keeps the expensive fan-out **opt-in and explicit** — it runs when,
+and only when, you decide to spend on it.
+
+**Install `audit` for all your repos:**
+
+```bash
+mkdir -p ~/.claude/commands
+curl -fsSL https://raw.githubusercontent.com/Par-B/par-skills/main/commands/audit.md \
+  -o ~/.claude/commands/audit.md
+```
+
+Or, if you've already cloned this repo: `cp commands/audit.md ~/.claude/commands/`.
 
 ## ⚠️ Permissions & trust — please read before installing
 
@@ -332,6 +376,8 @@ baseline above, only add it if you actually run superpowers' planning flow.
 par-skills/                              marketplace "par-plugins"
 ├── .claude-plugin/marketplace.json      lists each skill plugin
 ├── recommended-permissions.json         optional baseline perms (copy into settings.json)
+├── commands/                            standalone slash commands (copy-in, not plugins)
+│   └── audit.md                         /audit — read-only 4-dimension multi-agent audit
 └── plugins/                             one plugin per skill (install à la carte)
     ├── status-board/
     │   ├── .claude-plugin/plugin.json
