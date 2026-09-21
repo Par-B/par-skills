@@ -18,6 +18,11 @@ that carries a one-line note per plan.
 - When work starts, move the plan to `active/`. When it ships, move it to `done/`.
 - Naming: `YYYY-MM-DD-<slug>-design.md` (design) / `-plan.md` (task breakdown).
 - Only `active/` plans keep a `*.tasks.json` tracker — delete it on archival.
+- This file is the **current board**: it keeps detailed `done`/`wont-do` notes
+  only for the current + previous release. Older ones roll to a sibling
+  `ARCHIVE.md` (which also carries a terse index of the whole `done/` folder).
+  The rollover happens **at release time**, and only the *descriptions* move —
+  the plan files themselves stay in `done/`/`wont-do/`, so links keep working.
 
 ---
 

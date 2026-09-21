@@ -2,10 +2,17 @@
 """Render a repo's plans/ directory as a single status-board Markdown table.
 
 One process, one tool round trip — independent of plan count. The folder tree is
-the source of truth; descriptions are enriched from plans/README.md notes, with
-a fallback to each plan file's title. Drift between folders and README is flagged.
+the source of truth; descriptions are enriched from plans/README.md notes (and,
+for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
+to each plan file's title. Drift between folders and README is flagged.
 
-Usage:  status_board.py [--root DIR] [--scope full|active|next|ideas|done|wontdo]
+Two-tier archive: README.md is the CURRENT board (active/backlog/future-ideas +
+recently-done for the current+previous release). Older done/wont-do descriptions
+roll to plans/ARCHIVE.md at release time; the plan FILES never move. The
+`--scope archive` view relays ARCHIVE.md.
+
+Usage:  status_board.py [--root DIR]
+                        [--scope full|active|next|ideas|done|wontdo|archive]
 Exit codes: 0 = board rendered, 3 = no board found (caller should offer bootstrap).
 
 Security properties (for auditors — each is verifiable against the code below):
@@ -45,6 +52,13 @@ SCOPES = {
     "done": ["done"],
     "wontdo": ["wont-do"],
 }
+# "archive" is a special scope (relays ARCHIVE.md), handled outside SCOPES.
+SCOPE_CHOICES = list(SCOPES) + ["archive"]
+# Undocumented-file drift is a real mistake only for current work. An
+# un-annotated done/wont-do plan is normal (the folder + git is the record),
+# so those dirs are excluded from the "undocumented" direction of drift.
+DRIFT_UNDOCUMENTED_STATES = ["active", "backlog", "future-ideas"]
+ARCHIVE_NAME = "ARCHIVE.md"
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
 MD_TOKEN_RE = re.compile(r"[\w.\-{},]+\.md")          # may contain a {a,b} group
 BACKTICK_RE = re.compile(r"`([^`]+)`")
@@ -216,11 +230,12 @@ def find_root(start):
 
 def main():
     """Parse args, locate <root>/plans/, and print the in-scope sections (plus a
-    drift section for full scope) as one Markdown table on stdout. Read-only:
-    returns an exit code and performs no filesystem writes."""
+    drift section for full scope) as one Markdown table on stdout. The `archive`
+    scope instead relays plans/ARCHIVE.md verbatim. Read-only: returns an exit
+    code and performs no filesystem writes."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=None)
-    ap.add_argument("--scope", default="full", choices=list(SCOPES))
+    ap.add_argument("--scope", default="full", choices=SCOPE_CHOICES)
     args = ap.parse_args()
 
     root = args.root or find_root(os.getcwd())
@@ -230,7 +245,35 @@ def main():
         print("NO_BOARD")
         return 3
 
+    # Archive view: relay the deep-archive file (ARCHIVE.md) verbatim, or a
+    # single *(none)* table when it doesn't exist yet (backward-compatible).
+    if args.scope == "archive":
+        archive_path = os.path.join(plans, ARCHIVE_NAME)
+        body = ""
+        if os.path.isfile(archive_path):
+            try:
+                with open(archive_path, encoding="utf-8", errors="replace") as fh:
+                    body = fh.read()
+            except OSError:
+                body = ""
+        if body.strip():
+            print(body.rstrip("\n"))
+        else:
+            print("\n".join([
+                "| Archive | |",
+                "|---|---|",
+                "| *(none)* | No ARCHIVE.md yet |",
+            ]))
+        return 0
+
     notes, documented, table_stems = parse_readme(readme)
+    # ARCHIVE.md (deep archive) is a second description source for plans whose
+    # README note has rolled off. README notes win on a key collision.
+    archive_path = os.path.join(plans, ARCHIVE_NAME)
+    if os.path.isfile(archive_path):
+        arch_notes, _, _ = parse_readme(archive_path)
+        for k, v in arch_notes.items():
+            notes.setdefault(k, v)
     rows = ["| Plan | Description |", "|---|---|"]
 
     for state in SCOPES[args.scope]:
@@ -250,7 +293,14 @@ def main():
         on_disk = set()
         for state in STATES:
             on_disk.update(stem(f) for f in plan_files(os.path.join(plans, state)))
-        undocumented = sorted(on_disk - documented)
+        # Undocumented: only current-work dirs — a missing note there is a real
+        # mistake. Archived (done/wont-do) files need no README note.
+        on_disk_current = set()
+        for state in DRIFT_UNDOCUMENTED_STATES:
+            on_disk_current.update(
+                stem(f) for f in plan_files(os.path.join(plans, state)))
+        undocumented = sorted(on_disk_current - documented)
+        # Stale (README row with no file) is a real error anywhere — all dirs.
         stale = sorted(table_stems - on_disk)
         if undocumented or stale:
             rows.append("| **⚠️ Drift** | |")

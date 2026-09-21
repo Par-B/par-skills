@@ -20,6 +20,7 @@ and bootstrap only — never move, rename, or create plan files.
 | "future ideas", "ideas", "someday" | `ideas` |
 | "done", "shipped", "finished" | `done` |
 | "won't do", "rejected", "dropped" | `wontdo` |
+| "archive", "old", "history", "the deep archive", "rolled-off" | `archive` |
 
 When unclear, use `full`. There is **no single-plan filter**: for "status of the
 X plan", use `full` and point the user at the matching row.
@@ -57,19 +58,50 @@ board yourself, applying the **Rules & format** below with `Glob`/`Read`:
 1. Find the repo root (`git rev-parse --show-toplevel`, else current dir). If
    `plans/` or `plans/README.md` is missing → **Bootstrap**.
 2. `Glob` each in-scope state dir for `*.md` (exclude `README.md`, `*.tasks.json`).
-3. `Read` `plans/README.md` once for per-plan notes.
-4. Only for plans with no README note, `Read` that file for a title.
+3. `Read` `plans/README.md` once for per-plan notes; also `Read`
+   `plans/ARCHIVE.md` if it exists (README notes win on a collision). For
+   `archive` scope, relay `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
+4. Only for plans with no README/ARCHIVE note, `Read` that file for a title.
+
+## Two-tier archive (README.md + ARCHIVE.md)
+
+The board is split across two sibling files so `README.md` stays the **current
+board** even after hundreds of plans finish:
+
+- **`plans/README.md`** = the current board: `active` / `backlog` /
+  `future-ideas`, plus **recently-done** and **recently-won't-do** entries for
+  the **current + previous release** only.
+- **`plans/ARCHIVE.md`** (optional sibling) = the deep archive: the detailed
+  done/won't-do entries that have **rolled off** README (older than the previous
+  release), plus a terse auto-generated index of the whole `done/` folder.
+
+The plan **FILES never move** between these — only their one-line *descriptions*
+roll from README → ARCHIVE.md, so cross-references into `done/` stay intact. The
+rollover is **release-triggered**: at each release, the release cycle that falls
+out of the "current + previous release" window is moved to ARCHIVE.md (this is a
+human/maintenance step, not something the render does). If `ARCHIVE.md` is
+absent, everything behaves exactly as a single-file board.
 
 ## Rules & format (both paths must match)
 
 - Source of truth = the folders. `done` and `wont-do`: keep only the **2 newest**
   by `YYYY-MM-DD-` filename prefix (undated sort last).
 - Description = the one-line note from `plans/README.md`, matched by filename —
-  expand `{a,b}` brace shorthand and read backticked slugs. If no note, use the
-  plan file's first meaningful heading (skip generic ones like "Problem", "What",
+  expand `{a,b}` brace shorthand and read backticked slugs. **Also read
+  `plans/ARCHIVE.md`** (same sibling dir) if present and match by filename, so a
+  `done`/`wontdo`/`archive` render still finds notes for rolled-off plans;
+  README notes win when a plan appears in both. If still no note, use the plan
+  file's first meaningful heading (skip generic ones like "Problem", "What",
   "Summary"; strip a leading "Future:"). Truncate to ~150 chars.
-- Drift (**`full` scope only**): on-disk files absent from README → *undocumented*;
-  README plan rows with no file → *stale*.
+- Drift (**`full` scope only**): a **missing README note is drift only for
+  current work** — on-disk files under `active`/`backlog`/`future-ideas` absent
+  from README → *undocumented*. Do **not** flag un-annotated `done`/`wont-do`
+  files (an archived plan needs no note — the folder + git is the record). In
+  the other direction, README plan rows with no file → *stale*, for **any**
+  section (a dangling reference is always an error).
+- `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
+  Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
+  one-row `*(none)*` table. Relay whatever it prints verbatim.
 - Output is ONE Markdown table. Each in-scope state is a bold section-header row
   with an empty second cell; plan rows follow, plain (name = filename without
   `.md`; escape `|`). Empty in-scope section → one `*(none)*` row. Order: In
