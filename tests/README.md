@@ -7,8 +7,11 @@ against throwaway settings files: a fresh machine gets the template's
 `permissions` and `autoMode`; a misconfigured one loses the `_remove` rules and
 its ask list, keeps its own allow/deny rules and unrelated keys, and gets a
 backup; an `autoMode` list with `"$defaults"` keeps its own entries while one
-without is replaced; a second run changes nothing; `--dry-run` and `--check`
-write nothing; `--keep-ask` leaves ask rules alone; invalid JSON is refused
+without is replaced, and superseded wordings of the template's own auto-mode
+rules are retired; nothing is written unless the answer on standard input is
+exactly `YES`, and the change outline and warning come before the question; a
+second run changes nothing and asks nothing; `--dry-run` and `--check` write
+nothing; `--keep-ask` leaves ask rules alone; invalid JSON is refused
 untouched. It also checks the shipped template itself: no duplicate or
 conflicting rules, an empty ask list, every `autoMode` list starting with
 `"$defaults"`, and no misplaced `:*`. Pure Python, no LLM. Run with

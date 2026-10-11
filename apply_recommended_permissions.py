@@ -13,16 +13,22 @@ a settings file with it:
   autoMode.<list>           a list that is missing, or that lacks "$defaults"
                             (so it silently replaced the built-in rules), is
                             replaced by the template's; a list that has
-                            "$defaults" keeps its own entries and gains the
-                            template's
+                            "$defaults" keeps its own entries, loses the
+                            superseded wordings under `_remove`, and gains
+                            the template's
 
 Every other settings key is left untouched. A timestamped backup is written
 next to the settings file before any change.
 
+Nothing is written without consent: the script lists every rule it would add
+or remove, warns that this changes permission settings, and applies only when
+the answer on standard input is exactly YES. There is no flag to skip that.
+
 Usage: apply_recommended_permissions.py [--settings PATH] [--template PATH]
                                         [--dry-run | --check] [--keep-ask]
 Exit codes: 0 = applied, or nothing to do; 1 = --check found differences;
-            2 = template or settings file missing or not valid JSON.
+            2 = template or settings file missing or not valid JSON;
+            3 = not confirmed, nothing written.
 
 Security note: reads the template and the settings file, and writes only the
 settings file and its backup. No network access, no subprocesses. Standard
@@ -79,19 +85,18 @@ def union(existing, wanted):
 
 
 def reconcile(settings, template, keep_ask=False):
-    """Return (new_settings, report); report is a list of printable lines."""
+    """Return (new_settings, changes).
+
+    changes is a list of (list name, replaced, removed rules, added rules).
+    """
     new = json.loads(json.dumps(settings))
-    report = []
+    changes = []
 
     def note(name, before, after, replaced=False):
         added = [r for r in after if r not in before]
         removed = [r for r in before if r not in after]
-        if not added and not removed:
-            return
-        verb = "replaced" if replaced else "updated"
-        report.append(f"{name}: {verb} (+{len(added)} -{len(removed)})")
-        report.extend(f"  - {r}" for r in removed)
-        report.extend(f"  + {r}" for r in added)
+        if added or removed:
+            changes.append((name, replaced, removed, added))
 
     wanted = template.get("permissions", {})
     bad = template.get("_remove", {}).get("permissions", {})
@@ -112,6 +117,7 @@ def reconcile(settings, template, keep_ask=False):
              replaced=(key == "ask" and not keep_ask))
 
     wanted_auto = template.get("autoMode", {})
+    bad_auto = template.get("_remove", {}).get("autoMode", {})
     if wanted_auto:
         auto = new.get("autoMode")
         if not isinstance(auto, dict):
@@ -121,13 +127,37 @@ def reconcile(settings, template, keep_ask=False):
                 continue
             before = as_list(auto.get(key))
             keep = key in auto and DEFAULTS in before
-            after = (union(before, as_list(wanted_auto[key])) if keep
+            drop = as_list(bad_auto.get(key))
+            after = (union([e for e in before if e not in drop],
+                           as_list(wanted_auto[key])) if keep
                      else as_list(wanted_auto[key]))
             if after != before or key not in auto:
                 auto[key] = after
             note(f"autoMode.{key}", before, after, replaced=not keep)
 
-    return new, report
+    return new, changes
+
+
+def summary(changes):
+    width = max(len(name) for name, *_ in changes)
+    return [f"  {name:<{width}}  +{len(added):<4} -{len(removed):<4}"
+            f"{' (list replaced)' if replaced else ''}".rstrip()
+            for name, replaced, removed, added in changes]
+
+
+def details(changes):
+    lines = []
+    for name, _replaced, removed, added in changes:
+        lines.append(f"{name}:")
+        lines.extend(f"  - {r}" for r in removed)
+        lines.extend(f"  + {r}" for r in added)
+    return lines
+
+
+def confirmed():
+    """True only when the next line on standard input is exactly YES."""
+    print("Type YES to apply (anything else cancels): ", end="", flush=True)
+    return sys.stdin.readline().strip() == "YES"
 
 
 def write_atomic(path, data):
@@ -160,21 +190,38 @@ def main(argv=None):
     ap.add_argument("--keep-ask", action="store_true",
                     help="keep existing permissions.ask rules")
     args = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):  # never die on a console codepage
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
 
     path = args.settings or default_settings_path()
     template = load_json(args.template, "template")
     settings = load_json(path, "settings file") if path.exists() else {}
 
-    new, report = reconcile(settings, template, keep_ask=args.keep_ask)
+    new, changes = reconcile(settings, template, keep_ask=args.keep_ask)
     if new == settings:
         print(f"{path}: already matches the recommended settings")
         return 0
 
-    print(f"{path}:")
-    print("\n".join(report) if report else "  (list keys added)")
+    if changes:
+        print("Rules to remove (-) and add (+):")
+        print("\n".join(details(changes)))
+        print()
+    verb = "would change" if args.dry_run or args.check else "will change"
+    print(f"This {verb} Claude Code permission settings in {path}:")
+    print("\n".join(summary(changes)) if changes
+          else "  (empty list keys added; no rules change)")
     if args.dry_run or args.check:
-        print("no changes written")
+        print("No changes written.")
         return 1 if args.check else 0
+
+    print("These rules decide what Claude may run, read and delete without "
+          "asking you.")
+    print("A backup of the current file is written first."
+          if path.exists() else "The file does not exist yet and is created.")
+    if not confirmed():
+        print("\nNot confirmed. Nothing was written.")
+        return 3
 
     if path.exists():
         backup = path.with_name(

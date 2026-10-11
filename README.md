@@ -301,13 +301,31 @@ python3 apply_recommended_permissions.py             # apply to ~/.claude/settin
 python3 apply_recommended_permissions.py --check     # exit 1 if the machine has drifted
 ```
 
+**Nothing is written until you type `YES`.** The script first lists every rule
+it would remove (`-`) and add (`+`), then a per-list summary, warns that this
+changes what Claude may run, read and delete without asking, and waits:
+
+```text
+This will change Claude Code permission settings in ~/.claude/settings.json:
+  permissions.allow  +4    -4
+  permissions.deny   +77   -0
+  permissions.ask    +0    -69   (list replaced)
+These rules decide what Claude may run, read and delete without asking you.
+A backup of the current file is written first.
+Type YES to apply (anything else cancels):
+```
+
+Any other answer — `yes`, `y`, Enter, or no input at all — cancels with exit
+code 3 and writes nothing. There is no flag to skip the question. If the
+machine already matches, the script says so and asks nothing.
+
 What the script does to your settings file, and nothing else:
 
 | Block | What happens |
 |---|---|
 | `permissions.allow`, `permissions.deny` | Your own rules stay. The template's rules are added. The known-bad rules listed under `_remove` are deleted — for example bare `Read`, `Bash(git:*)`, `Bash(*)` and the wildcard deny `Bash(rm -rf /*)`, which blocks every absolute-path delete. |
 | `permissions.ask` | Replaced by the template's list, which is empty. Pass `--keep-ask` to leave yours alone. |
-| `autoMode.environment`, `allow`, `soft_deny`, `hard_deny` | A list that is missing, or that lacks `"$defaults"`, is replaced by the template's. A list that has `"$defaults"` keeps its own entries and gains the template's. |
+| `autoMode.environment`, `allow`, `soft_deny`, `hard_deny` | A list that is missing, or that lacks `"$defaults"`, is replaced by the template's. A list that has `"$defaults"` keeps its own entries and gains the template's; earlier wordings of the template's own rules, listed under `_remove`, are retired. |
 | Everything else | Untouched. A timestamped backup is written next to the file first. |
 
 The `"$defaults"` rule matters: an `autoMode` list without it **replaces** the
@@ -364,11 +382,14 @@ Claude Code afterward.
 **What the auto-mode rules add** (`autoMode`, in plain language):
 
 - **Blocked unless you name it** — publishing, editing or deleting a GitHub
-  release or pushing a release tag; deleting several remote branches, tags,
-  issues or pull requests at once; changing a repository's settings, visibility,
-  collaborators, secrets or Actions variables.
-- **Allowed** — deleting files and folders the session itself created, in the
-  repository, its worktrees or a temp directory.
+  release or pushing a release tag (name the version); deleting, closing or
+  transferring more than one remote branch, tag, issue or pull request (give the
+  exact list); deleting, archiving, renaming or transferring a repository, or
+  changing its visibility, protection, collaborators, secrets or variables (name
+  the setting and its new value).
+- **Allowed** — deleting a literally named file or folder that an earlier step
+  in the same session created, in the repository, its worktrees or a temp
+  directory. Globs and shell variables are not covered.
 - **Everything built in stays** — every list starts with `"$defaults"`.
 
 **What happens to everything unlisted:** in auto mode the classifier decides,

@@ -8,10 +8,10 @@ SCRIPT = str(ROOT / "apply_recommended_permissions.py")
 TEMPLATE = ROOT / "recommended-permissions.json"
 
 
-def _run(settings, *args):
+def _run(settings, *args, answer="YES\n"):
     return subprocess.run(
         [sys.executable, SCRIPT, "--settings", str(settings), *args],
-        capture_output=True, text=True)
+        capture_output=True, text=True, input=answer)
 
 
 def _load(path):
@@ -92,6 +92,18 @@ def test_auto_mode_list_with_defaults_keeps_its_own_entries(tmp_path):
     assert set(want["soft_deny"]) <= set(auto["soft_deny"])
 
 
+def test_superseded_auto_mode_wording_is_retired(tmp_path):
+    settings = tmp_path / "settings.json"
+    t = _template()
+    old = t["_remove"]["autoMode"]["soft_deny"][0]
+    assert old not in t["autoMode"]["soft_deny"]
+    _write(settings, {"autoMode": {"soft_deny": ["$defaults", old, "Mine"]}})
+    assert _run(settings).returncode == 0
+    got = _load(settings)["autoMode"]["soft_deny"]
+    assert old not in got and "Mine" in got
+    assert set(t["autoMode"]["soft_deny"]) <= set(got)
+
+
 def test_second_run_changes_nothing(tmp_path):
     settings = tmp_path / "settings.json"
     _write(settings, MISCONFIGURED)
@@ -107,12 +119,38 @@ def test_dry_run_and_check_write_nothing(tmp_path):
     settings = tmp_path / "settings.json"
     _write(settings, MISCONFIGURED)
     before = settings.read_bytes()
-    dry = _run(settings, "--dry-run")
+    dry = _run(settings, "--dry-run", answer="")
     assert dry.returncode == 0 and "- Bash(git:*)" in dry.stdout
-    assert _run(settings, "--check").returncode == 1
+    assert "Type YES" not in dry.stdout
+    assert _run(settings, "--check", answer="").returncode == 1
     assert settings.read_bytes() == before and _backups(tmp_path) == []
     assert _run(settings).returncode == 0
     assert _run(settings, "--check").returncode == 0
+
+
+def test_nothing_is_written_without_a_typed_yes(tmp_path):
+    settings = tmp_path / "settings.json"
+    _write(settings, MISCONFIGURED)
+    before = settings.read_bytes()
+    for answer in ("", "\n", "yes\n", "y\n", "YES please\n", "no\n"):
+        r = _run(settings, answer=answer)
+        assert r.returncode == 3, answer
+        assert "Nothing was written" in r.stdout
+        assert settings.read_bytes() == before and _backups(tmp_path) == []
+    # the outline and the warning are shown before the question
+    out = r.stdout
+    assert "- Bash(git:*)" in out and "+ Bash(sudo:*)" in out
+    assert "will change Claude Code permission settings" in out
+    assert out.index("permissions.ask") < out.index("Type YES")
+    assert _run(settings, answer="YES\n").returncode == 0
+    assert _load(settings)["permissions"]["ask"] == []
+
+
+def test_no_question_when_nothing_would_change(tmp_path):
+    settings = tmp_path / "settings.json"
+    assert _run(settings).returncode == 0
+    r = _run(settings, answer="")
+    assert r.returncode == 0 and "Type YES" not in r.stdout
 
 
 def test_keep_ask_leaves_ask_rules_alone(tmp_path):

@@ -198,20 +198,20 @@
     ],
     "allow": [
       "$defaults",
-      "Session-created cleanup: deleting files or folders that this session or its subagents created, inside the working repository, its worktrees, or a temp directory"
+      "Session-created cleanup: deleting a specific, literally named file or directory inside the working repository, its worktrees, or a temp directory, when a prior tool call visible in this transcript created that exact path and everything in it. Does not cover globs, shell variables, age or pattern filters, or paths whose creation is only asserted in narration."
     ],
     "soft_deny": [
       "$defaults",
-      "GitHub release: publishing, editing or deleting a GitHub release, or creating or pushing a release tag such as v1.2.3, unless the user named that release",
-      "GitHub bulk delete: deleting several remote branches, tags, issues, pull requests or other GitHub objects in one command or loop",
-      "GitHub repository settings: changing a repository's settings, visibility, collaborators, secrets or Actions variables"
+      "GitHub release [named+specifics — **must name:** the release tag or version, such as v1.2.3]: publishing, editing or deleting a GitHub release, drafts included, or pushing a release tag, including bulk tag pushes with `git push --tags` or `--follow-tags`. Creating a local tag without pushing it is not covered. A general request such as \"cut a release\" does not clear this.",
+      "GitHub bulk delete [named+specifics — **must name:** the exact list of objects, shown literally in the command or printed earlier in the transcript]: deleting, closing, locking or transferring more than one remote branch, tag, issue, pull request or other GitHub object, whether in one command, a shell loop, or repeated single calls.",
+      "GitHub repository administration [named+specifics — **must name:** the specific setting and its new value, or the repository being deleted, archived, renamed or transferred]: deleting, archiving, renaming or transferring a repository, or changing its visibility, default branch, branch protection or rulesets, collaborators, webhooks, deploy keys, secrets or Actions variables. Covers `gh repo edit`, `gh repo delete`, `gh secret set`, `gh variable set`, and `gh api` calls that use PATCH, PUT or DELETE on a repository."
     ],
     "hard_deny": [
       "$defaults"
     ]
   },
   "_remove": {
-    "_comment": "Rules the apply script deletes from a machine's settings because they defeat the baseline. Every existing ask rule is also removed, since permissions.ask is replaced.",
+    "_comment": "Entries the apply script deletes from a machine's settings: permission rules that defeat the baseline, and earlier wordings of this template's auto-mode rules. Every existing ask rule is also removed, since permissions.ask is replaced.",
     "permissions": {
       "allow": [
         "Bash",
@@ -239,6 +239,16 @@
       "deny": [
         "Bash(rm -rf /*)",
         "Bash(rm -rf ~/*)"
+      ]
+    },
+    "autoMode": {
+      "allow": [
+        "Session-created cleanup: deleting files or folders that this session or its subagents created, inside the working repository, its worktrees, or a temp directory"
+      ],
+      "soft_deny": [
+        "GitHub release: publishing, editing or deleting a GitHub release, or creating or pushing a release tag such as v1.2.3, unless the user named that release",
+        "GitHub bulk delete: deleting several remote branches, tags, issues, pull requests or other GitHub objects in one command or loop",
+        "GitHub repository settings: changing a repository's settings, visibility, collaborators, secrets or Actions variables"
       ]
     }
   }
