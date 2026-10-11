@@ -338,6 +338,13 @@ Things worth knowing before you rely on it:
 - **Ask beats allow.** A blanket `Bash(gh:*)` or `Bash(git push:*)` in `ask`
   would make `gh pr` and every push prompt again — that's why the ask rules name
   specific subcommands and flags.
+- **Ask rules override auto mode.** In auto mode an unlisted command goes to the
+  classifier, but a command matching an ask rule always prompts. Keep ask
+  patterns narrow: a broad one such as `Bash(rm *..*)` stops every
+  `rm ../file`, which is why the temp-delete guards are scoped to `/tmp`.
+- **`git -C <dir> …` is deliberately not allowed.** A rule like
+  `Bash(git -C * status*)` also matches `git -C x checkout -- status.md`. In
+  manual mode the `-C` spelling prompts; in auto mode the classifier decides.
 - **Windows needs the `PowerShell(...)` twins.** `Bash(...)` rules don't apply to
   the PowerShell tool, and with Git Bash installed a Bash deny rule silently
   turns PowerShell off unless a `PowerShell(...)` rule is also present.

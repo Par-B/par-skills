@@ -145,7 +145,7 @@
       "Bash(gh extension:*)",
       "Bash(gh alias:*)",
       "Bash(rm */tmp/* *)",
-      "Bash(rm *..*)",
+      "Bash(rm */tmp/*..*)",
       "Bash(sort -o*)",
       "Bash(sort * -o*)",
       "Bash(sort *--output*)",
@@ -178,8 +178,8 @@
       "PowerShell(gh auth:*)",
       "PowerShell(gh extension:*)",
       "PowerShell(gh alias:*)",
-      "PowerShell(Remove-Item *,*)",
-      "PowerShell(Remove-Item *..*)"
+      "PowerShell(Remove-Item *TEMP\\*,*)",
+      "PowerShell(Remove-Item *TEMP\\*..*)"
     ]
   }
 }
