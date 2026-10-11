@@ -1,5 +1,5 @@
 {
-  "_comment": "Recommended Claude Code settings for macOS and Windows: the explicit desired state for `permissions` and `autoMode`. Apply it with `python3 apply_recommended_permissions.py` (see README 'Recommended permissions'), which brings a new machine up and corrects a misconfigured one: it adds these rules, removes the known-bad rules listed under `_remove`, empties `permissions.ask`, and repairs `autoMode` lists that dropped \"$defaults\". Design: no ask rules (an ask stalls an unattended agent; a deny returns at once), a short deny list for what must never run, and plain-language auto-mode rules for everything that needs judgement. Precedence is deny > ask > allow; anything unlisted goes to the auto-mode classifier, or prompts in manual mode. Bash(...) rules cover the Bash tool (macOS, Linux, Git Bash); PowerShell(...) rules are their Windows twins. Bash/PowerShell deny rules match the usual spelling of a command, so they are tripwires, not a security boundary. No secrets or machine-specific paths. `_comment` and `_remove` are not settings keys: do not paste them into settings.json.",
+  "_comment": "Recommended Claude Code settings for macOS and Windows: the explicit desired state for `permissions`, `autoMode` and `attribution`. Apply it with `python3 apply_recommended_permissions.py` (see README 'Recommended permissions'), which brings a new machine up and corrects a misconfigured one: it adds these rules, removes the known-bad rules listed under `_remove`, empties `permissions.ask`, repairs `autoMode` lists that dropped \"$defaults\", and turns off the Claude attribution lines on commits and pull requests. Design: no ask rules (an ask stalls an unattended agent; a deny returns at once), a short deny list for what must never run, and plain-language auto-mode rules for everything that needs judgement. Precedence is deny > ask > allow; anything unlisted goes to the auto-mode classifier, or prompts in manual mode. Bash(...) rules cover the Bash tool (macOS, Linux, Git Bash); PowerShell(...) rules are their Windows twins. Bash/PowerShell deny rules match the usual spelling of a command, so they are tripwires, not a security boundary. No secrets or machine-specific paths. `_comment` and `_remove` are not settings keys: do not paste them into settings.json.",
   "permissions": {
     "allow": [
       "WebSearch",
@@ -209,6 +209,11 @@
     "hard_deny": [
       "$defaults"
     ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
   },
   "_remove": {
     "_comment": "Entries the apply script deletes from a machine's settings: permission rules that defeat the baseline, and earlier wordings of this template's auto-mode rules. Every existing ask rule is also removed, since permissions.ask is replaced.",

@@ -276,7 +276,8 @@ the ref.
 > came for the skills.
 
 [`recommended-permissions.json`](recommended-permissions.json) is the **explicit
-desired state** for two settings blocks, `permissions` and `autoMode`. It is
+desired state** for three settings blocks: `permissions`, `autoMode` and
+`attribution`. It is
 **secret-free**, has **no machine-specific paths**, and is written to work on
 both **macOS and Windows**. Its purpose is to get a new machine productive fast
 and to correct a misconfigured one, so it says outright what should be there,
@@ -326,6 +327,7 @@ What the script does to your settings file, and nothing else:
 | `permissions.allow`, `permissions.deny` | Your own rules stay. The template's rules are added. The known-bad rules listed under `_remove` are deleted — for example bare `Read`, `Bash(git:*)`, `Bash(*)` and the wildcard deny `Bash(rm -rf /*)`, which blocks every absolute-path delete. |
 | `permissions.ask` | Replaced by the template's list, which is empty. Pass `--keep-ask` to leave yours alone. |
 | `autoMode.environment`, `allow`, `soft_deny`, `hard_deny` | A list that is missing, or that lacks `"$defaults"`, is replaced by the template's. A list that has `"$defaults"` keeps its own entries and gains the template's; earlier wordings of the template's own rules, listed under `_remove`, are retired. |
+| `attribution` | `commit` and `pr` are set to empty and `sessionUrl` to `false`, so Claude Code itself leaves the `Co-Authored-By` trailer, the "Generated with Claude Code" line and the session link off commits and pull requests. Other keys in the block stay. Delete the block from the template if you want the attribution lines. |
 | Everything else | Untouched. A timestamped backup is written next to the file first. |
 
 The `"$defaults"` rule matters: an `autoMode` list without it **replaces** the
@@ -337,8 +339,8 @@ started in.
 
 `autoMode` is read from user settings only (`~/.claude/settings.json`), never
 from a project's `.claude/settings.json`, so apply the template at user scope.
-To copy by hand instead, take the `permissions` and `autoMode` objects and leave
-out `_comment` and `_remove`, which are not settings keys. Restart or reload
+To copy by hand instead, take the `permissions`, `autoMode` and `attribution`
+objects and leave out `_comment` and `_remove`, which are not settings keys. Restart or reload
 Claude Code afterward.
 
 **What the baseline allows without asking:**

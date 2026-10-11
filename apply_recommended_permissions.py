@@ -2,8 +2,8 @@
 """Apply recommended-permissions.json to a Claude Code settings file.
 
 Brings a new machine up and corrects a misconfigured one. The template is the
-explicit desired state for `permissions` and `autoMode`; this script reconciles
-a settings file with it:
+explicit desired state for `permissions`, `autoMode` and `attribution`; this
+script reconciles a settings file with it:
 
   permissions.allow / deny  existing rules are kept, the template's rules are
                             added, and the known-bad rules under `_remove` are
@@ -16,6 +16,8 @@ a settings file with it:
                             "$defaults" keeps its own entries, loses the
                             superseded wordings under `_remove`, and gains
                             the template's
+  attribution.<key>         set to the template's value (empty strings and
+                            false turn the Claude attribution lines off)
 
 Every other settings key is left untouched. A timestamped backup is written
 next to the settings file before any change.
@@ -135,6 +137,21 @@ def reconcile(settings, template, keep_ask=False):
                 auto[key] = after
             note(f"autoMode.{key}", before, after, replaced=not keep)
 
+    wanted_attr = template.get("attribution", {})
+    if wanted_attr:
+        attr = new.get("attribution")
+        if not isinstance(attr, dict):  # absent, or the older true/false form
+            attr = new["attribution"] = {}
+        missing = object()
+        for key, value in wanted_attr.items():
+            old = attr.get(key, missing)
+            if old is not missing and old == value and type(old) is type(value):
+                continue
+            attr[key] = value
+            before = [] if old is missing else [f"{key} = {json.dumps(old)}"]
+            changes.append(("attribution", True, before,
+                            [f"{key} = {json.dumps(value)}"]))
+
     return new, changes
 
 
@@ -208,7 +225,10 @@ def main(argv=None):
         print("\n".join(details(changes)))
         print()
     verb = "would change" if args.dry_run or args.check else "will change"
-    print(f"This {verb} Claude Code permission settings in {path}:")
+    kind = ("permission settings"
+            if any(not name.startswith("attribution") for name, *_ in changes)
+            or not changes else "settings")
+    print(f"This {verb} Claude Code {kind} in {path}:")
     print("\n".join(summary(changes)) if changes
           else "  (empty list keys added; no rules change)")
     if args.dry_run or args.check:

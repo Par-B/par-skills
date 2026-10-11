@@ -51,6 +51,7 @@ def test_fresh_machine_gets_the_template(tmp_path):
     got, want = _load(settings), _template()
     assert got["permissions"] == want["permissions"]
     assert got["autoMode"] == want["autoMode"]
+    assert got["attribution"] == want["attribution"]
     assert "_remove" not in got and "_comment" not in got
     assert _backups(tmp_path) == []
 
@@ -90,6 +91,23 @@ def test_auto_mode_list_with_defaults_keeps_its_own_entries(tmp_path):
     assert auto["environment"] == ["$defaults", mine]
     assert auto["soft_deny"][:2] == ["$defaults", "Never X"]
     assert set(want["soft_deny"]) <= set(auto["soft_deny"])
+
+
+def test_attribution_is_turned_off_and_reported(tmp_path):
+    settings = tmp_path / "settings.json"
+    for existing in ({"commit": "Made by a bot", "extra": 1}, True):
+        _write(settings, {"attribution": existing})
+        dry = _run(settings, "--dry-run", answer="")
+        assert 'commit = ""' in dry.stdout and "attribution" in dry.stdout
+        assert _run(settings).returncode == 0
+        got = _load(settings)["attribution"]
+        assert got["commit"] == "" and got["pr"] == ""
+        assert got["sessionUrl"] is False
+    _write(settings, {"attribution": {"commit": "Made by a bot", "extra": 1}})
+    dry = _run(settings, "--dry-run", answer="")
+    assert '- commit = "Made by a bot"' in dry.stdout
+    assert _run(settings).returncode == 0
+    assert _load(settings)["attribution"]["extra"] == 1
 
 
 def test_superseded_auto_mode_wording_is_retired(tmp_path):
