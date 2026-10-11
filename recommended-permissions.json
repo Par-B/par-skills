@@ -178,8 +178,8 @@
       "PowerShell(gh auth:*)",
       "PowerShell(gh extension:*)",
       "PowerShell(gh alias:*)",
-      "PowerShell(Remove-Item *TEMP\\*,*)",
-      "PowerShell(Remove-Item *TEMP\\*..*)"
+      "PowerShell(Remove-Item */Temp/*,*)",
+      "PowerShell(Remove-Item */Temp/*..*)"
     ]
   }
 }
