@@ -106,6 +106,8 @@ def test_attribution_is_turned_off_and_reported(tmp_path):
     _write(settings, {"attribution": {"commit": "Made by a bot", "extra": 1}})
     dry = _run(settings, "--dry-run", answer="")
     assert '- commit = "Made by a bot"' in dry.stdout
+    summary = dry.stdout[dry.stdout.index("This would change"):]
+    assert summary.count("attribution") == 1 and "replaced" not in summary
     assert _run(settings).returncode == 0
     assert _load(settings)["attribution"]["extra"] == 1
 

@@ -143,14 +143,17 @@ def reconcile(settings, template, keep_ask=False):
         if not isinstance(attr, dict):  # absent, or the older true/false form
             attr = new["attribution"] = {}
         missing = object()
+        removed, added = [], []
         for key, value in wanted_attr.items():
             old = attr.get(key, missing)
             if old is not missing and old == value and type(old) is type(value):
                 continue
             attr[key] = value
-            before = [] if old is missing else [f"{key} = {json.dumps(old)}"]
-            changes.append(("attribution", True, before,
-                            [f"{key} = {json.dumps(value)}"]))
+            if old is not missing:
+                removed.append(f"{key} = {json.dumps(old)}")
+            added.append(f"{key} = {json.dumps(value)}")
+        if added:
+            changes.append(("attribution", False, removed, added))
 
     return new, changes
 
