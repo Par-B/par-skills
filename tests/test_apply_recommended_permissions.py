@@ -192,6 +192,21 @@ def test_invalid_settings_file_is_not_touched(tmp_path):
     assert _backups(tmp_path) == []
 
 
+def test_one_remote_branch_can_be_deleted_but_not_several_or_main():
+    t = _template()
+    deny, retired = t["permissions"]["deny"], t["_remove"]["permissions"]["deny"]
+    for tool in ("Bash", "PowerShell"):
+        # the blanket delete-push denies are gone, and corrected on old machines
+        for old in (f"{tool}(git push *--delete*)", f"{tool}(git push * -d *)"):
+            assert old not in deny and old in retired
+        # what stays denied: several branches, main/master, flag-first spelling
+        for rule in ("git push * --delete * *", "git push * -d * *",
+                     "git push * --delete main", "git push * --delete master",
+                     "git push * -d main", "git push * -d master",
+                     "git push --delete*", "git push -d:*"):
+            assert f"{tool}({rule})" in deny
+
+
 def test_template_is_internally_consistent():
     t = _template()
     perms, bad = t["permissions"], t["_remove"]["permissions"]

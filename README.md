@@ -370,9 +370,15 @@ Claude Code afterward.
 - **Machine-level damage** — `rm -rf` of `/` or `~`, `sudo`, `dd`, `mkfs`,
   `shutdown`, `reboot`; on Windows `Format-Volume`, `Clear-Disk`,
   `Stop-Computer`, `Restart-Computer`.
-- **Destructive pushes** — force, delete, mirror, prune and tag pushes, and the
+- **Destructive pushes** — force, mirror, prune and tag pushes, and the
   push/fetch/pull options that run a program (`--exec`, `--receive-pack`,
   `--upload-pack`). An ordinary `git push` is allowed.
+- **Remote branch deletion, except one branch at a time** —
+  `git push origin --delete my-branch` (or `-d`) runs, so merged branches can be
+  cleaned up. Denied: several branches in one command, `main` or `master`, and
+  the flag-first spelling `git push --delete origin my-branch`. Each command is
+  judged alone, so repeated single deletes are not caught. To remove a branch as
+  part of a merge, `gh pr merge <n> --squash --delete-branch` is also allowed.
 - **GitHub releases and repository administration** — `gh release` create, edit,
   delete and upload (list and view still work); `gh repo` delete, archive, edit
   and rename; `gh secret` and `gh variable` set and delete; `gh workflow run`;
