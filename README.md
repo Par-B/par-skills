@@ -307,6 +307,9 @@ Either way, restart or reload Claude Code afterward to apply.
 - **Pull requests** — `gh pr …` (create, view, review, merge).
 - **Scratch files** — read, write and delete in the temp folder (`/tmp` on
   macOS/Linux, `~/AppData/Local/Temp` on Windows).
+- **Certificate listing on Windows** — `certutil -store …` (read-only). This is
+  the pre-approvable way to look at a store; `Get-ChildItem Cert:\…` always
+  prompts (see below).
 - **Mounted volumes on macOS** — read and write under `/Volumes` (portable
   drives and mounted NAS shares). Windows drives are *not* included; they prompt.
 
@@ -338,6 +341,22 @@ Things worth knowing before you rely on it:
 - **Windows needs the `PowerShell(...)` twins.** `Bash(...)` rules don't apply to
   the PowerShell tool, and with Git Bash installed a Bash deny rule silently
   turns PowerShell off unless a `PowerShell(...)` rule is also present.
+- **A backslash in a `PowerShell(...)` rule never matches.** It is read as an
+  escape character, however it is doubled, so a rule spelled
+  `Remove-Item C:\Users\*\AppData\Local\Temp\*` is dead. The temp-delete rules
+  are therefore written with forward slashes and only match a command spelled
+  the same way: `Remove-Item C:/Users/<you>/AppData/Local/Temp/file` runs
+  unprompted, the backslash spelling prompts. In Git Bash, `rm /tmp/file` reaches
+  the same folder.
+- **Some PowerShell always prompts, whatever the allow list says.** Claude Code
+  checks the command's shape before it consults the rules, and only a blanket
+  `PowerShell` allow gets past these checks:
+  - a script block — `Where-Object { … }`, `ForEach-Object { … }`, a calculated
+    property `@{n=…;e={…}}`. `Select-Object Name`, `Measure-Object`,
+    `Sort-Object` and the block-free `Where-Object Length -gt 0` are fine.
+  - a variable or subexpression in an argument — `$env:TEMP\file`, `$(…)`,
+    `(Get-ChildItem).Count`. Write the literal path instead.
+  - a non-filesystem drive — `Cert:\`, `HKLM:\`, `Env:`.
 - **Path rules: `//` is absolute, `/` is not.** `Edit(//tmp/**)` is the real
   `/tmp`; `Edit(/tmp/**)` means a `tmp` folder next to the settings file. On
   Windows `C:\` is written `//c/`. `Write(path)` rules are accepted but never
@@ -356,6 +375,8 @@ purpose (add them only for repos/machines you trust):
 - `Bash(xargs:*)`, `Bash(timeout:*)`, `Bash(tee:*)` — arbitrary-exec / write vectors
 - `Bash(git:*)` — every git command, including `git -c …` forms that run a program
 - `Bash(gh:*)` — workflow runs, repo settings, secrets and raw API calls
+- bare `PowerShell` — every PowerShell command, script blocks included (the ask
+  and deny rules still apply on top)
 - bare `Read` — reads any file on the machine, credentials included
 - any `Bash(sudo …)` **allow** (sudo is routed to `ask` instead)
 - project or drive-letter `Edit(...)` paths — machine-specific; add your own
@@ -369,6 +390,8 @@ purpose (add them only for repos/machines you trust):
 "Edit(//path/to/your/repo/**)",
 // A Windows drive, e.g. a portable drive or mapped NAS share on E: (one pair per letter)
 "Read(//e/**)", "Edit(//e/**)",
+// All of PowerShell without prompts: script blocks, $env: paths, Cert:\ and HKLM:\ (runs arbitrary code)
+"PowerShell",
 // C / build toolchain (runs the project's build code — trust the repo)
 "Bash(make:*)", "Bash(cmake:*)", "Bash(gcc:*)", "Bash(cc:*)", "Bash(clang:*)", "Bash(pkg-config:*)",
 // Build wrapper (bear -- make runs the wrapped build, so it executes code too)
