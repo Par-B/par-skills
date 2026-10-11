@@ -275,9 +275,11 @@ the ref.
 > install a skill from here — or skip it entirely if you only came for the skills.
 
 The baseline lives in
-[`recommended-permissions.json`](recommended-permissions.json) — a **secret-free,
-path-free** template. There's no "import a permissions file" command; you merge it
-into your own settings. Precedence is **deny > ask > allow**.
+[`recommended-permissions.json`](recommended-permissions.json) — a **secret-free**
+template with **no machine-specific paths**, written to work on both **macOS and
+Windows**. There's no "import a permissions file" command; you merge it into your
+own settings. Precedence is **deny > ask > allow**, and anything the file doesn't
+list still prompts.
 
 **Two ways to apply it:**
 
@@ -293,30 +295,80 @@ into your own settings. Precedence is **deny > ask > allow**.
 
 Either way, restart or reload Claude Code afterward to apply.
 
-**What the baseline grants (safe):** read-only inspection (`ls`, `cat`, `rg`,
-`grep`, `find`, `diff`, `jq`, …), scoped web (`WebSearch`, GitHub `WebFetch`),
-`git` (dangerous subcommands gated below), and scratch writes to `/tmp`. It
-**denies** destructive commands (`rm -rf /`, `dd`, `mkfs`, `shutdown`, …) and
-**asks** before `sudo`, `git push`, `git reset --hard`, `git clean`,
-`git rebase`, and `gh`.
+**What the baseline allows without asking:**
 
-**Deliberately excluded** — these auto-approve *arbitrary code* or escalate
-privileges, so they're left out on purpose (add them only for repos/machines you
-trust):
+- **Read-only inspection** — `ls`, `cat`, `rg`, `grep`, `find`, `diff`, `jq`, …
+  and the PowerShell equivalents (`Get-ChildItem`, `Get-Content`,
+  `Select-String`, …).
+- **Scoped web** — `WebSearch` and GitHub `WebFetch`.
+- **Everyday git, by named subcommand** — `status`, `log`, `diff`, `show`,
+  `blame`, `add`, `commit`, `fetch`, `pull`, `push`, `merge`, `stash`,
+  `worktree`, `branch`, `switch`, `checkout -b`.
+- **Pull requests** — `gh pr …` (create, view, review, merge).
+- **Scratch files** — read, write and delete in the temp folder (`/tmp` on
+  macOS/Linux, `~/AppData/Local/Temp` on Windows).
+- **Mounted volumes on macOS** — read and write under `/Volumes` (portable
+  drives and mounted NAS shares). Windows drives are *not* included; they prompt.
+
+**What it asks about first:** `sudo`; force pushes and remote-branch deletion;
+`git stash drop`/`clear`, `git reset --hard`, `git clean`, `git rebase`,
+`git config`; git options that run a program (`--upload-pack`, `--receive-pack`,
+`--exec`); `gh workflow`, `gh run rerun`, `gh api`, `gh repo`, `gh secret`,
+`gh variable`, `gh auth`, `gh extension`, `gh alias`; a temp-folder delete that
+names a second path or contains `..`; `sort -o` and `rg --pre`.
+
+**What it denies outright:** reading credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`,
+`.netrc`, the `gh` config folder, and any `.env` file); `rm -rf` of `/` or `~`;
+`sudo rm`, `dd`, `mkfs`, `shutdown`, `reboot`; and on Windows `Format-Volume`,
+`Clear-Disk`, `Stop-Computer`, `Restart-Computer`.
+
+**What still prompts because it isn't listed:** every other `git` and `gh`
+command (including `git -C <dir> …` and `git -c …` forms), deletes outside the
+temp folder, file reads outside the project, and any drive on Windows.
+
+Things worth knowing before you rely on it:
+
+- **Bash and PowerShell rules are tripwires, not a security boundary.** An ask or
+  deny rule matches the usual spelling of a command; `git -C . push --force` or
+  `/bin/rm` gets past it. The allow list is the real guard, because anything
+  unlisted prompts. For hard enforcement use Claude Code's sandbox.
+- **Ask beats allow.** A blanket `Bash(gh:*)` or `Bash(git push:*)` in `ask`
+  would make `gh pr` and every push prompt again — that's why the ask rules name
+  specific subcommands and flags.
+- **Windows needs the `PowerShell(...)` twins.** `Bash(...)` rules don't apply to
+  the PowerShell tool, and with Git Bash installed a Bash deny rule silently
+  turns PowerShell off unless a `PowerShell(...)` rule is also present.
+- **Path rules: `//` is absolute, `/` is not.** `Edit(//tmp/**)` is the real
+  `/tmp`; `Edit(/tmp/**)` means a `tmp` folder next to the settings file. On
+  Windows `C:\` is written `//c/`. `Write(path)` rules are accepted but never
+  consulted — use `Edit(path)`.
+- **Network shares must be mounted or mapped.** Reads from a raw `\\server\share`
+  or `/net/...` path always prompt; no allow rule can pre-approve them.
+- **`git commit`, `pull` and `merge` run the repo's own hooks.** Only use the
+  baseline in repos you trust.
+
+**Deliberately excluded** — these auto-approve *arbitrary code*, escalate
+privileges, or expose more than a baseline should, so they're left out on
+purpose (add them only for repos/machines you trust):
 
 - `Bash(bash:*)`, `Bash(source:*)` — run arbitrary scripts
 - `Bash(python3:*)`, `Bash(perl:*)`, `Bash(node:*)` — run arbitrary code
 - `Bash(xargs:*)`, `Bash(timeout:*)`, `Bash(tee:*)` — arbitrary-exec / write vectors
+- `Bash(git:*)` — every git command, including `git -c …` forms that run a program
+- `Bash(gh:*)` — workflow runs, repo settings, secrets and raw API calls
+- bare `Read` — reads any file on the machine, credentials included
 - any `Bash(sudo …)` **allow** (sudo is routed to `ask` instead)
-- absolute-path `Write(...)`/`Edit(...)` — machine-specific; add your own
+- project or drive-letter `Edit(...)` paths — machine-specific; add your own
 
 **Optional add-on groups** — append to `allow` only if you want them:
 
 ```jsonc
 // File management (can overwrite local files)
 "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(touch:*)", "Bash(ln:*)",
-// Your project (replace the path with your repo)
-"Edit(/path/to/your/repo/**)", "Write(/path/to/your/repo/**)",
+// Your project (replace the path with your repo; `//` = absolute, Windows C:\ = //c/)
+"Edit(//path/to/your/repo/**)",
+// A Windows drive, e.g. a portable drive or mapped NAS share on E: (one pair per letter)
+"Read(//e/**)", "Edit(//e/**)",
 // C / build toolchain (runs the project's build code — trust the repo)
 "Bash(make:*)", "Bash(cmake:*)", "Bash(gcc:*)", "Bash(cc:*)", "Bash(clang:*)", "Bash(pkg-config:*)",
 // Build wrapper (bear -- make runs the wrapped build, so it executes code too)
