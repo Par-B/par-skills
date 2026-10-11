@@ -6,7 +6,9 @@ This repo is a **marketplace** (`.claude-plugin/marketplace.json`, named
 `par-plugins`) of Claude Code skills. **Each skill is its own plugin**, so you
 install only the ones you want — à la carte, not all at once. It also ships a few
 standalone **slash commands** under [`commands/`](commands/) that you copy in
-directly (see [Commands](#commands-copy-in-not-plugins) below) rather than install.
+directly (see [Commands](#commands-copy-in-not-plugins) below) rather than install,
+and a set of **recommended permission settings** with a script that applies them
+to a machine (see [Using the apply script](#using-the-apply-script)).
 
 ## Install
 
@@ -294,17 +296,37 @@ what must not be, and what a machine should stop carrying.
   bulk deletes, repository settings. The classifier matches on meaning, so
   `git -C <dir> …` and `sh -c '…'` spellings don't slip past.
 
-**Apply it** with the script next to it (Python 3, standard library only):
+### Using the apply script
+
+[`apply_recommended_permissions.py`](apply_recommended_permissions.py) applies
+the template to your user settings file, `~/.claude/settings.json`. It needs
+Python 3 and nothing else (standard library only), and it works the same on
+macOS, Linux and Windows. On Windows, type `python` or `py -3` wherever the
+examples say `python3`.
+
+**1. Get the files.** The script and `recommended-permissions.json` must sit in
+the same folder. There is nothing to install.
 
 ```bash
-python3 apply_recommended_permissions.py --dry-run   # show what would change
-python3 apply_recommended_permissions.py             # apply to ~/.claude/settings.json
-python3 apply_recommended_permissions.py --check     # exit 1 if the machine has drifted
+git clone https://github.com/Par-B/par-skills
+cd par-skills
 ```
 
-**Nothing is written until you type `YES`.** The script first lists every rule
-it would remove (`-`) and add (`+`), then a per-list summary, warns that this
-changes what Claude may run, read and delete without asking, and waits:
+**2. Preview.** This lists every rule it would remove (`-`) and add (`+`),
+then a count per list. It writes nothing.
+
+```bash
+python3 apply_recommended_permissions.py --dry-run
+```
+
+**3. Apply.** Run it in an ordinary terminal window and type `YES` when asked.
+
+```bash
+python3 apply_recommended_permissions.py
+```
+
+The script shows the same list as the preview, then a summary and a warning,
+and waits:
 
 ```text
 This will change Claude Code permission settings in ~/.claude/settings.json:
@@ -316,9 +338,48 @@ A backup of the current file is written first.
 Type YES to apply (anything else cancels):
 ```
 
-Any other answer — `yes`, `y`, Enter, or no input at all — cancels with exit
-code 3 and writes nothing. There is no flag to skip the question. If the
-machine already matches, the script says so and asks nothing.
+**Nothing is written until you type `YES`.** Any other answer — `yes`, `y`,
+Enter, or no input at all — cancels with exit code 3 and leaves the file
+untouched. There is no flag to skip the question. Start it from a real
+terminal, not from inside a Claude Code session: a command launched there may
+receive no keyboard input, and the script then reports "Not confirmed".
+
+**4. Restart Claude Code** so every session picks up the new settings.
+
+**5. Confirm.** `--check` prints "already matches the recommended settings" and
+exits 0 when the machine is in the desired state.
+
+```bash
+python3 apply_recommended_permissions.py --check
+claude auto-mode config      # optional: the auto-mode rules Claude Code now uses
+```
+
+**Later on:**
+
+- **Pick up a newer template** — `git pull`, then run the script again. It shows
+  only what differs. If nothing does, it says so and asks nothing.
+- **Find out whether a machine has drifted** — `--check` exits 1 and lists the
+  differences, without writing. An agent can run `--dry-run` and `--check` for
+  you; the apply step is yours.
+- **Undo** — each apply first saves the previous file next to the settings file
+  as `settings.json.bak-<date>-<time>`. Copy that file back over
+  `settings.json` and restart Claude Code.
+
+| Option | What it does |
+|---|---|
+| *(none)* | Show the changes, ask for `YES`, back up, apply. |
+| `--dry-run` | Show the changes and exit. Writes nothing, asks nothing. |
+| `--check` | Like `--dry-run`, but exits 1 if anything would change. |
+| `--keep-ask` | Leave your existing `permissions.ask` rules in place instead of emptying the list. |
+| `--settings PATH` | Work on another settings file instead of `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set). The file is created if it does not exist. |
+| `--template PATH` | Use another template instead of the `recommended-permissions.json` next to the script. |
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Applied, or nothing needed changing. |
+| 1 | `--check` found differences. |
+| 2 | The template or the settings file is missing or is not valid JSON. Nothing was written. |
+| 3 | You did not type `YES`. Nothing was written. |
 
 What the script does to your settings file, and nothing else:
 
