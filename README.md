@@ -271,29 +271,57 @@ the ref.
 > **This has nothing to do with the skills.** It is **not** required by, bundled
 > with, or installed alongside `status-board` / `my-commits` or the marketplace.
 > It's a standalone convenience: a sensible, safe baseline of Claude Code
-> **permission rules** you can adopt in *any* project. Use it even if you never
-> install a skill from here — or skip it entirely if you only came for the skills.
+> **permission and auto-mode settings** you can adopt on *any* machine. Use it
+> even if you never install a skill from here — or skip it entirely if you only
+> came for the skills.
 
-The baseline lives in
-[`recommended-permissions.json`](recommended-permissions.json) — a **secret-free**
-template with **no machine-specific paths**, written to work on both **macOS and
-Windows**. There's no "import a permissions file" command; you merge it into your
-own settings. Precedence is **deny > ask > allow**, and anything the file doesn't
-list still prompts.
+[`recommended-permissions.json`](recommended-permissions.json) is the **explicit
+desired state** for two settings blocks, `permissions` and `autoMode`. It is
+**secret-free**, has **no machine-specific paths**, and is written to work on
+both **macOS and Windows**. Its purpose is to get a new machine productive fast
+and to correct a misconfigured one, so it says outright what should be there,
+what must not be, and what a machine should stop carrying.
 
-**Two ways to apply it:**
+**The design in three lines:**
 
-1. **Edit the file yourself.** Open `recommended-permissions.json`, copy the
-   `permissions` object, and merge it into `~/.claude/settings.json` (applies
-   everywhere) or a project's `.claude/settings.json` (that repo only). If you
-   already have a `permissions` block, *append* to the `allow`/`deny`/`ask` arrays
-   rather than replacing them; drop the `_comment` key (strict JSON).
+- **No ask rules.** An ask stalls an unattended agent until you come back; a deny
+  returns at once and the agent carries on. In auto mode an ask rule also
+  overrides the classifier, so one broad pattern stops routine work.
+- **A short deny list** for what must never run, written with wildcards so it
+  catches more than one spelling.
+- **Plain-language auto-mode rules** for what needs judgement — GitHub releases,
+  bulk deletes, repository settings. The classifier matches on meaning, so
+  `git -C <dir> …` and `sh -c '…'` spellings don't slip past.
 
-2. **Let Claude do it for you.** In a Claude Code session, say *"add these
-   permissions to `~/.claude/settings.json`"* and paste in the contents of
-   `recommended-permissions.json` — Claude will merge them into your settings.
+**Apply it** with the script next to it (Python 3, standard library only):
 
-Either way, restart or reload Claude Code afterward to apply.
+```bash
+python3 apply_recommended_permissions.py --dry-run   # show what would change
+python3 apply_recommended_permissions.py             # apply to ~/.claude/settings.json
+python3 apply_recommended_permissions.py --check     # exit 1 if the machine has drifted
+```
+
+What the script does to your settings file, and nothing else:
+
+| Block | What happens |
+|---|---|
+| `permissions.allow`, `permissions.deny` | Your own rules stay. The template's rules are added. The known-bad rules listed under `_remove` are deleted — for example bare `Read`, `Bash(git:*)`, `Bash(*)` and the wildcard deny `Bash(rm -rf /*)`, which blocks every absolute-path delete. |
+| `permissions.ask` | Replaced by the template's list, which is empty. Pass `--keep-ask` to leave yours alone. |
+| `autoMode.environment`, `allow`, `soft_deny`, `hard_deny` | A list that is missing, or that lacks `"$defaults"`, is replaced by the template's. A list that has `"$defaults"` keeps its own entries and gains the template's. |
+| Everything else | Untouched. A timestamped backup is written next to the file first. |
+
+The `"$defaults"` rule matters: an `autoMode` list without it **replaces** the
+built-in rules for that section. `/auto-mode-setup` writes the environment list
+that way, from whichever project you ran it in, so a machine can end up telling
+the classifier that one named repo is the only trusted one. The default — and
+what the template restores — is that the trusted repo is the one the session
+started in.
+
+`autoMode` is read from user settings only (`~/.claude/settings.json`), never
+from a project's `.claude/settings.json`, so apply the template at user scope.
+To copy by hand instead, take the `permissions` and `autoMode` objects and leave
+out `_comment` and `_remove`, which are not settings keys. Restart or reload
+Claude Code afterward.
 
 **What the baseline allows without asking:**
 
@@ -313,35 +341,59 @@ Either way, restart or reload Claude Code afterward to apply.
 - **Mounted volumes on macOS** — read and write under `/Volumes` (portable
   drives and mounted NAS shares). Windows drives are *not* included; they prompt.
 
-**What it asks about first:** `sudo`; force pushes and remote-branch deletion;
-`git stash drop`/`clear`, `git reset --hard`, `git clean`, `git rebase`,
-`git config`; git options that run a program (`--upload-pack`, `--receive-pack`,
-`--exec`); `gh workflow`, `gh run rerun`, `gh api`, `gh repo`, `gh secret`,
-`gh variable`, `gh auth`, `gh extension`, `gh alias`; a temp-folder delete that
-names a second path or contains `..`; `sort -o` and `rg --pre`.
+**What it asks about first:** nothing. `permissions.ask` is empty on purpose.
 
-**What it denies outright:** reading credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`,
-`.netrc`, the `gh` config folder, and any `.env` file); `rm -rf` of `/` or `~`;
-`sudo rm`, `dd`, `mkfs`, `shutdown`, `reboot`; and on Windows `Format-Volume`,
-`Clear-Disk`, `Stop-Computer`, `Restart-Computer`.
+**What it denies outright:**
 
-**What still prompts because it isn't listed:** every other `git` and `gh`
+- **Credentials** — reading `~/.ssh`, `~/.aws`, `~/.gnupg`, `.netrc`, the `gh`
+  config folder, and any `.env` file.
+- **Machine-level damage** — `rm -rf` of `/` or `~`, `sudo`, `dd`, `mkfs`,
+  `shutdown`, `reboot`; on Windows `Format-Volume`, `Clear-Disk`,
+  `Stop-Computer`, `Restart-Computer`.
+- **Destructive pushes** — force, delete, mirror, prune and tag pushes, and the
+  push/fetch/pull options that run a program (`--exec`, `--receive-pack`,
+  `--upload-pack`). An ordinary `git push` is allowed.
+- **GitHub releases and repository administration** — `gh release` create, edit,
+  delete and upload (list and view still work); `gh repo` delete, archive, edit
+  and rename; `gh secret` and `gh variable` set and delete; `gh workflow run`;
+  `gh api` with the `DELETE` method.
+- **Guards on the allow rules** — a temp-folder delete that names a second path
+  or contains `..`; `sort -o`; `rg --pre`. Each closes a way for an allowed
+  command to write or run something outside what the rule was meant to cover.
+
+**What the auto-mode rules add** (`autoMode`, in plain language):
+
+- **Blocked unless you name it** — publishing, editing or deleting a GitHub
+  release or pushing a release tag; deleting several remote branches, tags,
+  issues or pull requests at once; changing a repository's settings, visibility,
+  collaborators, secrets or Actions variables.
+- **Allowed** — deleting files and folders the session itself created, in the
+  repository, its worktrees or a temp directory.
+- **Everything built in stays** — every list starts with `"$defaults"`.
+
+**What happens to everything unlisted:** in auto mode the classifier decides,
+without prompting. In manual mode it prompts — every other `git` and `gh`
 command (including `git -C <dir> …` and `git -c …` forms), deletes outside the
 temp folder, file reads outside the project, and any drive on Windows.
 
 Things worth knowing before you rely on it:
 
-- **Bash and PowerShell rules are tripwires, not a security boundary.** An ask or
-  deny rule matches the usual spelling of a command; `git -C . push --force` or
-  `/bin/rm` gets past it. The allow list is the real guard, because anything
-  unlisted prompts. For hard enforcement use Claude Code's sandbox.
-- **Ask beats allow.** A blanket `Bash(gh:*)` or `Bash(git push:*)` in `ask`
-  would make `gh pr` and every push prompt again — that's why the ask rules name
-  specific subcommands and flags.
-- **Ask rules override auto mode.** In auto mode an unlisted command goes to the
-  classifier, but a command matching an ask rule always prompts. Keep ask
-  patterns narrow: a broad one such as `Bash(rm *..*)` stops every
-  `rm ../file`, which is why the temp-delete guards are scoped to `/tmp`.
+- **Bash and PowerShell rules are tripwires, not a security boundary.** A deny
+  rule matches the usual spelling of a command; `git -C . push --force` or
+  `/bin/rm` gets past it. The auto-mode rules catch those by meaning, and
+  GitHub-side protection is the only firm guarantee: add a ruleset that forbids
+  force-pushing and deleting `main`, and one that restricts creating `v*` tags.
+  For hard local enforcement use Claude Code's sandbox.
+- **Why there are no ask rules.** Ask beats allow, and in auto mode a command
+  matching an ask rule always prompts instead of going to the classifier. One
+  broad pattern, such as `Bash(rm *..*)`, stops every `rm ../file` and leaves a
+  background agent waiting for you.
+- **Auto mode can still pause.** If the classifier blocks 3 actions in a row or
+  20 in a session, auto mode stops and prompts. An allow rule resolves before
+  the classifier, so add one for any routine command it keeps blocking.
+- **Broad allow rules are dropped in auto mode.** `Bash(*)`, wildcarded
+  interpreters such as `Bash(python*)` and package-manager run commands are
+  suspended there, so they buy nothing and open everything in the other modes.
 - **`git -C <dir> …` is deliberately not allowed.** A rule like
   `Bash(git -C * status*)` also matches `git -C x checkout -- status.md`. In
   manual mode the `-C` spelling prompts; in auto mode the classifier decides.
@@ -382,10 +434,10 @@ purpose (add them only for repos/machines you trust):
 - `Bash(xargs:*)`, `Bash(timeout:*)`, `Bash(tee:*)` — arbitrary-exec / write vectors
 - `Bash(git:*)` — every git command, including `git -c …` forms that run a program
 - `Bash(gh:*)` — workflow runs, repo settings, secrets and raw API calls
-- bare `PowerShell` — every PowerShell command, script blocks included (the ask
-  and deny rules still apply on top)
+- bare `PowerShell` — every PowerShell command, script blocks included (the deny
+  rules still apply on top)
 - bare `Read` — reads any file on the machine, credentials included
-- any `Bash(sudo …)` **allow** (sudo is routed to `ask` instead)
+- any `Bash(sudo …)` **allow** (sudo is denied instead)
 - project or drive-letter `Edit(...)` paths — machine-specific; add your own
 
 **Optional add-on groups** — append to `allow` only if you want them:
@@ -457,7 +509,8 @@ baseline above, only add it if you actually run superpowers' planning flow.
 ```text
 par-skills/                              marketplace "par-plugins"
 ├── .claude-plugin/marketplace.json      lists each skill plugin
-├── recommended-permissions.json         optional baseline perms (copy into settings.json)
+├── recommended-permissions.json         recommended permissions + autoMode (desired state)
+├── apply_recommended_permissions.py     applies it to settings.json (--dry-run, --check)
 ├── commands/                            standalone slash commands (copy-in, not plugins)
 │   └── audit.md                         /audit — read-only 4-dimension multi-agent audit
 └── plugins/                             one plugin per skill (install à la carte)

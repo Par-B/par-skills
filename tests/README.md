@@ -1,5 +1,19 @@
 # Tests
 
+## recommended permissions — apply script
+
+`test_apply_recommended_permissions.py` runs `apply_recommended_permissions.py`
+against throwaway settings files: a fresh machine gets the template's
+`permissions` and `autoMode`; a misconfigured one loses the `_remove` rules and
+its ask list, keeps its own allow/deny rules and unrelated keys, and gets a
+backup; an `autoMode` list with `"$defaults"` keeps its own entries while one
+without is replaced; a second run changes nothing; `--dry-run` and `--check`
+write nothing; `--keep-ask` leaves ask rules alone; invalid JSON is refused
+untouched. It also checks the shipped template itself: no duplicate or
+conflicting rules, an empty ask list, every `autoMode` list starting with
+`"$defaults"`, and no misplaced `:*`. Pure Python, no LLM. Run with
+`pytest tests/test_apply_recommended_permissions.py`.
+
 ## my-commits
 
 `test_my_commits.py` exercises the `my-commits` script against throwaway git
