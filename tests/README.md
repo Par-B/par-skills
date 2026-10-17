@@ -32,7 +32,12 @@ file is drift (full scope only); an empty list shows `*(none)*`; the `next`
 scope shows the section and `active` does not; the heading match is loose, ends
 at the next heading and skips fenced code; only top-level items count (nested
 bullets are ignored), an item may name its plan by path or `.md` link, and
-commented-out items are skipped. Pure Python, no LLM. Run with
+commented-out items are skipped. Migration: a board without the heading and
+an old-style bold "next … order" list are flagged as `plans/README.md` drift
+rows (full scope only), while prose and a bold line with no list are not. A
+frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)
+reads the template and a migrated board with no drift, so old installs keep
+working. Pure Python, no LLM. Run with
 `pytest tests/test_status_board.py`.
 
 ## md-optimize — undo store

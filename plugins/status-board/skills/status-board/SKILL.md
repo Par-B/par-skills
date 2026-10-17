@@ -116,6 +116,12 @@ absent, everything behaves exactly as a single-file board.
   A next-order entry matching no plan file in any state → `in next-order list,
   no file`; these rows come after the undocumented and stale rows, in list
   order. A slug in that list counts as documented.
+  Migration rows, named `plans/README.md`, come last: no `next … order`
+  heading → `no "next — in order" section (pre-0.5 board) — migrate`; each
+  old-style list (a non-list line starting in bold whose bold text holds "next"
+  and "order", followed by an unindented list item naming a plan, as in the Next
+  rules, before the next heading) → `old-style next list at line N — move under
+  "next — in order"`.
 - `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
   Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
   one-row `*(none)*` table. Relay whatever it prints verbatim.
@@ -159,6 +165,35 @@ cp "$SKILL_DIR/references/readme-template.md" "$ROOT/plans/README.md"
 Use those five names exactly — `wont-do` (hyphen), NOT `wontdo`. Without Bash,
 do the same with your own tools: create the dirs and `Write` the README from the
 template file's contents. Then render the (empty) board.
+
+## Migrate (pre-0.5 board)
+
+Boards made before 0.5 have no `## ⏭ next — in order` section, and some wrote
+their order as a bold "next … order" line followed by a list. The board's
+**⚠️ Drift** shows `plans/README.md` migration rows for both (see Rules &
+format). After relaying a board that has them, offer once:
+
+> "This board predates the "Next, in order" section. Add it to
+> `plans/README.md`, moving the old list from line N?" (drop the "moving"
+> clause when there is no old-style list)
+
+On explicit approval, edit `plans/README.md` with your own tools:
+
+1. Insert the template's section (the `## ⏭ next — in order` heading, its
+   comment and `*(none)*`, from `references/readme-template.md`) directly
+   before the backlog heading.
+2. For each old-style list: move its items under the new heading as a numbered
+   list, one plan per item — split "A, then B" into two items — each starting
+   with the backticked slug, then its why-text; remove the `*(none)*` line. Keep
+   any context the bold line carried (who decided, when, a condition) as one
+   plain sentence above the list. Delete the bold line, its continuation lines
+   and the old list.
+3. Re-run the script: the migration rows must be gone.
+
+Change nothing else. After migration the heading is the only format: the script
+never renders old-style lists, it only flags them. Migrated boards still render
+under an older plugin (0.4.x): it lists those plans under "Designed, not
+started" and reports no drift.
 
 ## Out of scope
 

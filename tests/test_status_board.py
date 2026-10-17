@@ -9,6 +9,12 @@ STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 NEXT = "⏭ Next, in order"
 BACKLOG = "⚪ Designed, not started"
 TEMPLATE = REPO / "plugins/status-board/skills/status-board/references/readme-template.md"
+OLD_SCRIPT = str(REPO / "tests/fixtures/status_board/status_board_0_4_0.py")
+PRE05 = '| plans/README.md | no "next — in order" section (pre-0.5 board) — migrate |'
+
+
+def _legacy_row(n):
+    return f'| plans/README.md | old-style next list at line {n} — move under "next — in order" |'
 
 
 def _board(root, readme, files=()):
@@ -34,8 +40,8 @@ def _readme(next_items=None, mentions=(), heading="## ⏭ next — in order"):
     return "\n".join(parts) + "\n"
 
 
-def _run(root, scope="full"):
-    p = subprocess.run([sys.executable, SCRIPT, "--root", str(root), "--scope", scope],
+def _run(root, scope="full", script=SCRIPT):
+    p = subprocess.run([sys.executable, script, "--root", str(root), "--scope", scope],
                        capture_output=True, text=True, encoding="utf-8",
                        env=dict(os.environ, PYTHONUTF8="1"))
     assert p.returncode == 0, p.stderr
@@ -198,3 +204,79 @@ def test_backticked_path_entry_counts_as_documented(tmp_path):
     lines = _run(r)
     assert _section(lines, NEXT) == ["| 1. foo | Title of foo |"]
     assert not any("undocumented" in ln for ln in lines)
+
+
+LEGACY = "\n".join([
+    "# Plans", "",
+    "## ⚪ backlog — not started", "",
+    "**Next, in this order** (the owner), once the two in flight are merged",
+    "(`x`, then `y`):", "",
+    "1. `a`: first.",
+    "2. `b`: second.", "",
+    "- `a`", "- `b`", "- `c`",
+]) + "\n"                                   # the bold line is line 5
+
+
+def test_pre_05_board_flagged_in_full_scope_only(tmp_path):
+    r = _board(tmp_path, _readme(mentions=["a"]), ["backlog/a"])
+    assert PRE05 in _section(_run(r), "⚠️ Drift")
+    assert PRE05 not in _run(r, "next")
+
+
+def test_old_style_list_flagged_not_rendered(tmp_path):
+    r = _board(tmp_path, LEGACY, ["backlog/a", "backlog/b", "backlog/c"])
+    lines = _run(r)
+    assert f"| **{NEXT}** | |" not in lines
+    assert _section(lines, BACKLOG) == [
+        "| a | Title of a |", "| b | Title of b |", "| c | Title of c |"]
+    assert _section(lines, "⚠️ Drift") == [PRE05, _legacy_row(5)]
+
+
+def test_old_style_list_flagged_after_heading_added(tmp_path):
+    readme = "\n".join([
+        "# Plans", "",
+        "## ⏭ next — in order", "",
+        "1. `a`: why", "",
+        "## ⚪ backlog — not started", "",
+        "**Next, in this order**:", "",      # line 9
+        "1. `b`: old.", "",
+    ]) + "\n"
+    r = _board(tmp_path, readme, ["backlog/a", "backlog/b"])
+    lines = _run(r)
+    assert _section(lines, NEXT) == ["| 1. a | Title of a |"]
+    assert _section(lines, "⚠️ Drift") == [_legacy_row(9)]
+
+
+def test_prose_and_listless_bold_not_flagged(tmp_path):
+    readme = "\n".join([
+        "# Plans", "",
+        "## ⏭ next — in order", "",
+        "## ⚪ backlog — not started", "",
+        "Plans below are in no particular order; next ones get picked at planning.",
+        "- `a`", "",
+        "**Next, in order** is decided at planning.", "",
+        "## 💡 future-ideas", "",
+        "- `b`", "",
+    ]) + "\n"
+    r = _board(tmp_path, readme, ["backlog/a", "future-ideas/b"])
+    assert "| **⚠️ Drift** | |" not in _run(r)
+
+
+def test_template_board_has_no_migration_rows(tmp_path):
+    r = _board(tmp_path, TEMPLATE.read_text(encoding="utf-8"), [])
+    assert not any("plans/README.md" in ln for ln in _run(r))
+
+
+def test_old_script_reads_template_board(tmp_path):
+    r = _board(tmp_path, TEMPLATE.read_text(encoding="utf-8"), [])
+    lines = _run(r, script=OLD_SCRIPT)
+    assert "| **⚠️ Drift** | |" not in lines
+    assert _section(lines, BACKLOG) == ["| *(none)* | |"]
+
+
+def test_old_script_reads_migrated_board(tmp_path):
+    r = _board(tmp_path, _readme(["a", "b", "x"]), ["backlog/a", "backlog/b", "done/x"])
+    lines = _run(r, script=OLD_SCRIPT)
+    assert f"| **{NEXT}** | |" not in lines
+    assert "| **⚠️ Drift** | |" not in lines
+    assert _section(lines, BACKLOG) == ["| a | Title of a |", "| b | Title of b |"]

@@ -74,6 +74,7 @@ ORDER_WORD_RE = re.compile(r"\border\b", re.I)
 # Unindented only: a nested item can sit as little as 2-3 spaces in (the width
 # of its parent's "- " or "1. " marker), so any indent means "sub-item".
 LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.*)$")
+LEGACY_NEXT_RE = re.compile(r"^(\*\*|__)(.+?)\1")   # a line starting in bold
 GENERIC_HEADINGS = {
     "future ideas", "future", "ideas", "overview", "summary", "problem",
     "what", "why", "background", "motivation", "goal", "goals", "context",
@@ -197,49 +198,67 @@ def item_slug(text):
     return stem(tok.strip().rsplit("/", 1)[-1])
 
 
-def parse_next_order(path):
-    """Read plans/README.md (read-only) and return the slugs listed under its
-    "next — in order" heading, in order — or None when there is no such heading.
+def names_next_order(text):
+    """True when `text` holds the words "next" and "order" (any case) — the
+    marker of the order list, as a heading or, on pre-0.5 boards, a bold line."""
+    return bool(NEXT_WORD_RE.search(text) and ORDER_WORD_RE.search(text))
 
-    A heading counts if it holds the words "next" and "order" (any level, emoji
-    or case). The section runs to the next heading. Only top-level list items
-    are entries; each names one plan by its first backticked slug or .md link
-    (paths reduced to the filename). HTML comments and fenced code are skipped.
-    Text parsing only."""
+
+def parse_next_order(path):
+    """Read plans/README.md (read-only) and return (order, legacy).
+
+    `order` is the slugs listed under the "next — in order" heading, in order,
+    or None when there is no such heading. A heading counts if it holds the
+    words "next" and "order" (any level, emoji or case); the section runs to
+    the next heading. Only top-level list items are entries; each names one
+    plan by its first backticked slug or .md link (paths reduced to the
+    filename). `legacy` is the 1-based line numbers of old-style lists, the
+    pre-0.5 way of writing the order: a non-list line starting in bold whose
+    bold text names next and order, followed by an unindented list item naming
+    a plan (as in the Next rules) before the next heading. HTML comments and
+    fenced code are skipped. Text parsing only."""
     try:
         # Read-only: parse the README as text. Contents are pattern-matched only.
         with open(path, encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
     except OSError:
-        return None
-    order, inside, fenced, comment = None, False, False, False
-    for line in lines:
+        return None, []
+    order, legacy = None, []
+    inside = fenced = comment = False
+    pending = None                    # bold "next … order" line awaiting its list
+    for n, line in enumerate(lines, 1):
         s = line.strip()
+        if not comment and (s.startswith("```") or s.startswith("~~~")):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
         if comment:
             comment = "-->" not in s
             continue
         if s.startswith("<!--"):
             comment = "-->" not in s[4:]
             continue
-        if s.startswith("```") or s.startswith("~~~"):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
         m = HEADING_RE.match(s)
         if m:
+            pending = None
+            inside = order is None and names_next_order(m.group(1))
             if inside:
-                break
-            if NEXT_WORD_RE.search(m.group(1)) and ORDER_WORD_RE.search(m.group(1)):
-                inside, order = True, []
-            continue
-        if not inside:
+                order = []
             continue
         item = LIST_ITEM_RE.match(line)
         slug = item_slug(item.group(1)) if item else ""
-        if slug and slug not in order:
-            order.append(slug)
-    return order
+        if inside:
+            if slug and slug not in order:
+                order.append(slug)
+        elif slug and pending:
+            legacy.append(pending)
+            pending = None
+        elif not item:
+            b = LEGACY_NEXT_RE.match(s)
+            if b and names_next_order(b.group(2)):
+                pending = n
+    return order, legacy
 
 
 def fallback_desc(path):
@@ -344,7 +363,7 @@ def main():
             notes.setdefault(k, v)
     # Next, in order: the README's ordered list, kept to plans still in backlog/
     # and numbered by position. None = no heading, so no section at all.
-    next_order = parse_next_order(readme)
+    next_order, legacy_next = parse_next_order(readme)
     # List entries count as documented by their reduced slug (`backlog/foo` -> foo).
     documented.update(next_order or [])
     backlog_dir = os.path.join(plans, "backlog")
@@ -393,7 +412,15 @@ def main():
         # Next-order entries that match no plan in any state (typo or rename).
         # Entries whose plan moved on to active/done/... are skipped silently.
         next_missing = [s for s in (next_order or []) if s not in on_disk]
-        if undocumented or stale or next_missing:
+        # Migration: a pre-0.5 board has no "next — in order" heading and may
+        # still hold its order as a bold line + list. The skill offers to migrate.
+        migrate = []
+        if next_order is None:
+            migrate.append('no "next — in order" section (pre-0.5 board) — migrate')
+        for n in legacy_next:
+            migrate.append(
+                f'old-style next list at line {n} — move under "next — in order"')
+        if undocumented or stale or next_missing or migrate:
             rows.append("| **⚠️ Drift** | |")
             for s in undocumented:
                 rows.append(f"| {esc(s)} | undocumented (in folder, not in README) |")
@@ -401,6 +428,8 @@ def main():
                 rows.append(f"| {esc(s)} | stale (in README, no file) |")
             for s in next_missing:
                 rows.append(f"| {esc(s)} | in next-order list, no file |")
+            for msg in migrate:
+                rows.append(f"| plans/README.md | {esc(msg)} |")
 
     print("\n".join(rows))
     return 0
