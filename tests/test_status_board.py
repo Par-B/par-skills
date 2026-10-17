@@ -8,6 +8,7 @@ SCRIPT = str(REPO / "plugins/status-board/skills/status-board/scripts/status_boa
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 NEXT = "⏭ Next, in order"
 BACKLOG = "⚪ Designed, not started"
+TEMPLATE = REPO / "plugins/status-board/skills/status-board/references/readme-template.md"
 
 
 def _board(root, readme, files=()):
@@ -182,3 +183,10 @@ def test_html_comments_skipped(tmp_path):
     ]) + "\n"
     r = _board(tmp_path, readme, ["backlog/a", "backlog/x", "backlog/y"])
     assert _section(_run(r), NEXT) == ["| 1. a | Title of a |"]
+
+
+def test_template_board_has_empty_next_section(tmp_path):
+    r = _board(tmp_path, TEMPLATE.read_text(encoding="utf-8"), [])
+    lines = _run(r)
+    assert _section(lines, NEXT) == ["| *(none)* | |"]
+    assert "| **⚠️ Drift** | |" not in lines

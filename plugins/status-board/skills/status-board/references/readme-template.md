@@ -30,6 +30,14 @@ that carries a one-line note per plan.
 
 *(none)*
 
+## ⏭ next — in order
+
+<!-- Optional: the next few backlog plans, in the order to do them. One numbered
+item per plan: its backticked filename without the extension, then a short why.
+The board shows the ones still in backlog/, renumbered from 1. -->
+
+*(none)*
+
 ## ⚪ backlog — not started
 
 *(none)*

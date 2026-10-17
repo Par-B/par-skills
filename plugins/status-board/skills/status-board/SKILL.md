@@ -16,7 +16,7 @@ and bootstrap only — never move, rename, or create plan files.
 |---|---|
 | "status", "status board", "everything", or anything unclear | `full` |
 | "active", "in flight", "in progress", "running" | `active` |
-| "what's next", "not started", "backlog", "upcoming" | `next` |
+| "what's next", "next in order", "priorities", "not started", "backlog", "upcoming" | `next` |
 | "future ideas", "ideas", "someday" | `ideas` |
 | "done", "shipped", "finished" | `done` |
 | "won't do", "rejected", "dropped" | `wontdo` |
@@ -58,9 +58,10 @@ board yourself, applying the **Rules & format** below with `Glob`/`Read`:
 1. Find the repo root (`git rev-parse --show-toplevel`, else current dir). If
    `plans/` or `plans/README.md` is missing → **Bootstrap**.
 2. `Glob` each in-scope state dir for `*.md` (exclude `README.md`, `*.tasks.json`).
-3. `Read` `plans/README.md` once for per-plan notes; also `Read`
-   `plans/ARCHIVE.md` if it exists (README notes win on a collision). For
-   `archive` scope, relay `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
+3. `Read` `plans/README.md` once for per-plan notes and its `next — in order`
+   list (if that heading exists); also `Read` `plans/ARCHIVE.md` if it exists
+   (README notes win on a collision). For `archive` scope, relay
+   `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
 4. Only for plans with no README/ARCHIVE note, `Read` that file for a title.
 
 ## Two-tier archive (README.md + ARCHIVE.md)
@@ -93,26 +94,39 @@ absent, everything behaves exactly as a single-file board.
   README notes win when a plan appears in both. If still no note, use the plan
   file's first meaningful heading (skip generic ones like "Problem", "What",
   "Summary"; strip a leading "Future:"). Truncate to ~150 chars.
+- **Next, in order** (`full` and `next` scopes): an optional list under a
+  README heading holding the words "next" and "order" (any level, emoji or case;
+  canonically `## ⏭ next — in order`), running to the next heading. Each
+  top-level list item names one plan by its first backticked slug or `.md` link
+  (a path counts by its filename); nested items, HTML comments and fenced code
+  are ignored. Show only entries whose plan is in `backlog/`, in list order,
+  numbered by position (`| 1. <slug> | <description> |`), and drop them from
+  "Designed, not started". Skip entries whose plan is in any other state. No
+  heading → no section; heading but no live entries → `*(none)*`.
 - Drift (**`full` scope only**): a **missing README note is drift only for
   current work** — on-disk files under `active`/`backlog`/`future-ideas` absent
   from README → *undocumented*. Do **not** flag un-annotated `done`/`wont-do`
   files (an archived plan needs no note — the folder + git is the record). In
   the other direction, README plan rows with no file → *stale*, for **any**
   section (a dangling reference is always an error).
+  A next-order entry matching no plan file in any state → `in next-order list,
+  no file`. A slug in that list counts as documented.
 - `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
   Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
   one-row `*(none)*` table. Relay whatever it prints verbatim.
 - Output is ONE Markdown table. Each in-scope state is a bold section-header row
   with an empty second cell; plan rows follow, plain (name = filename without
   `.md`; escape `|`). Empty in-scope section → one `*(none)*` row. Order: In
-  flight → Designed-not-started → Future ideas → Last 2 done → Last 2 won't-do →
-  Drift. Example:
+  flight → Next, in order → Designed-not-started → Future ideas → Last 2 done →
+  Last 2 won't-do → Drift. Example:
 
   ```
   | Plan | Description |
   |---|---|
   | **🔵 In flight** | |
   | 2026-05-01-some-plan-design | one-line description |
+  | **⏭ Next, in order** | |
+  | 1. 2026-05-02-other-plan | one-line description |
   | **⚪ Designed, not started** | |
   | *(none)* | |
   ```
