@@ -30,6 +30,14 @@ that carries a one-line note per plan.
 
 *(none)*
 
+## ⏭ next — in order
+
+<!-- Optional: the next few backlog plans, in the order to do them. One numbered
+item per plan: its backticked filename without the extension, then a short why.
+The board shows the ones still in backlog/, renumbered from 1. -->
+
+*(none)*
+
 ## ⚪ backlog — not started
 
 - `2026-10-17-status-board-start-and-finish-on-main-design` — `/status-board:start` moves a plan to `active/` on `main` (pushed) and makes or syncs its branch from there; `/status-board:finish` checks and puts right the plan on `main` after a merge; the board flags a start or finish missed on `main`.
