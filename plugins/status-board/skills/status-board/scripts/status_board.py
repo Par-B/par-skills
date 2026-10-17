@@ -21,8 +21,8 @@ Security properties (for auditors — each is verifiable against the code below)
   * Standard library only: imports argparse, os, re, sys. No third-party
     packages, no dynamic imports.
   * Read-only: every open() below uses the default read mode (see parse_readme,
-    parse_next_order and fallback_desc). The script never writes, creates, deletes, or renames
-    anything on disk.
+    parse_next_order and fallback_desc). The script never writes, creates,
+    deletes, or renames anything on disk.
   * No code execution: no subprocess / os.system / eval / exec / compile /
     __import__. File contents are read as text and pattern-matched only — never
     interpreted or run.
@@ -71,7 +71,9 @@ FUTURE_PREFIX_RE = re.compile(r"^future(\s+ideas?)?\s*[:—-]\s*", re.I)
 HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 NEXT_WORD_RE = re.compile(r"\bnext\b", re.I)
 ORDER_WORD_RE = re.compile(r"\border\b", re.I)
-LIST_ITEM_RE = re.compile(r"^\s*(?:\d+[.)]|[-*+])\s+(.*)$")
+# Unindented only: a nested item can sit as little as 2-3 spaces in (the width
+# of its parent's "- " or "1. " marker), so any indent means "sub-item".
+LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.*)$")
 GENERIC_HEADINGS = {
     "future ideas", "future", "ideas", "overview", "summary", "problem",
     "what", "why", "background", "motivation", "goal", "goals", "context",
@@ -183,22 +185,42 @@ def parse_readme(path):
     return notes, documented, table
 
 
+def item_slug(text):
+    """The plan a next-list item names: its first backticked slug or .md
+    filename/link, whichever comes first, reduced to a bare stem (a path like
+    backlog/foo.md -> foo). "" when the item names none."""
+    hits = [m for m in (BACKTICK_RE.search(text), MD_TOKEN_RE.search(text)) if m]
+    if not hits:
+        return ""
+    m = min(hits, key=lambda h: h.start())
+    tok = m.group(1) if m.re is BACKTICK_RE else m.group(0)
+    return stem(tok.strip().rsplit("/", 1)[-1])
+
+
 def parse_next_order(path):
     """Read plans/README.md (read-only) and return the slugs listed under its
     "next — in order" heading, in order — or None when there is no such heading.
 
     A heading counts if it holds the words "next" and "order" (any level, emoji
-    or case). The section runs to the next heading. Each list item names one
-    plan by its first backticked slug; fenced code is skipped. Text parsing only."""
+    or case). The section runs to the next heading. Only top-level list items
+    are entries; each names one plan by its first backticked slug or .md link
+    (paths reduced to the filename). HTML comments and fenced code are skipped.
+    Text parsing only."""
     try:
         # Read-only: parse the README as text. Contents are pattern-matched only.
         with open(path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().replace("\r\n", "\n").split("\n")
+            lines = fh.read().splitlines()
     except OSError:
         return None
-    order, inside, fenced = None, False, False
+    order, inside, fenced, comment = None, False, False, False
     for line in lines:
         s = line.strip()
+        if comment:
+            comment = "-->" not in s
+            continue
+        if s.startswith("<!--"):
+            comment = "-->" not in s[4:]
+            continue
         if s.startswith("```") or s.startswith("~~~"):
             fenced = not fenced
             continue
@@ -211,12 +233,12 @@ def parse_next_order(path):
             if NEXT_WORD_RE.search(m.group(1)) and ORDER_WORD_RE.search(m.group(1)):
                 inside, order = True, []
             continue
-        item = LIST_ITEM_RE.match(line) if inside else None
-        bt = BACKTICK_RE.search(item.group(1)) if item else None
-        if bt:
-            slug = stem(bt.group(1).strip())
-            if slug and slug not in order:
-                order.append(slug)
+        if not inside:
+            continue
+        item = LIST_ITEM_RE.match(line)
+        slug = item_slug(item.group(1)) if item else ""
+        if slug and slug not in order:
+            order.append(slug)
     return order
 
 

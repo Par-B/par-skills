@@ -140,3 +140,45 @@ def test_next_row_uses_readme_note(tmp_path):
     readme = _readme(["a"]) + "\n| Plan | Note |\n|---|---|\n| a.md | note from readme |\n"
     r = _board(tmp_path, readme, ["backlog/a"])
     assert _section(_run(r), NEXT) == ["| 1. a | note from readme |"]
+
+
+def test_nested_bullets_are_not_entries(tmp_path):
+    readme = "\n".join([
+        "## next — in order", "",
+        "1. `a`: why",
+        "   - `b` being done first",
+        "",
+    ]) + "\n"
+    r = _board(tmp_path, readme, ["backlog/a", "backlog/b"])
+    lines = _run(r)
+    assert _section(lines, NEXT) == ["| 1. a | Title of a |"]
+    assert _section(lines, BACKLOG) == ["| b | Title of b |"]
+
+
+def test_items_name_plans_by_path_or_link(tmp_path):
+    readme = "\n".join([
+        "## next — in order", "",
+        "1. `backlog/a.md`: why",
+        "2. [Title B](backlog/b.md) — why, see `fix/some-branch`",
+        "3. `c`: see d.md for context",
+        "",
+        "## ⚪ backlog — not started", "",
+        "- `d`",
+    ]) + "\n"
+    r = _board(tmp_path, readme, ["backlog/a", "backlog/b", "backlog/c", "backlog/d"])
+    lines = _run(r)
+    assert _section(lines, NEXT) == [
+        "| 1. a | Title of a |", "| 2. b | Title of b |", "| 3. c | Title of c |"]
+    assert not any("next-order" in ln for ln in lines)
+
+
+def test_html_comments_skipped(tmp_path):
+    readme = "\n".join([
+        "## next — in order", "",
+        "<!--", "1. `x`: parked", "-->",
+        "<!-- 1. `y`: parked too -->",
+        "1. `a`: real",
+        "",
+    ]) + "\n"
+    r = _board(tmp_path, readme, ["backlog/a", "backlog/x", "backlog/y"])
+    assert _section(_run(r), NEXT) == ["| 1. a | Title of a |"]

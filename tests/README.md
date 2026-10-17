@@ -30,7 +30,9 @@ entries still in `backlog/` show in list order, renumbered, and leave "Designed,
 not started"; entries that moved to another state are skipped; an entry with no
 file is drift (full scope only); an empty list shows `*(none)*`; the `next`
 scope shows the section and `active` does not; the heading match is loose, ends
-at the next heading and skips fenced code. Pure Python, no LLM. Run with
+at the next heading and skips fenced code; only top-level items count (nested
+bullets are ignored), an item may name its plan by path or `.md` link, and
+commented-out items are skipped. Pure Python, no LLM. Run with
 `pytest tests/test_status_board.py`.
 
 ## md-optimize — undo store
