@@ -1,6 +1,6 @@
 ---
 name: status-board
-description: Use when the user asks to see project status, the status board, what's in progress vs. done, what's next or the priorities (next in order), or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do.
+description: Use when the user asks to see project status, the status board, what's in progress vs. done, what's next or the priorities (next in order), or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do. Also when the user wants to change what comes next — put a plan next, move it up or down the order, add it to or take it off the next list.
 ---
 
 # Status Board
@@ -8,7 +8,8 @@ description: Use when the user asks to see project status, the status board, wha
 Render a repo's `plans/` directory as a single status-board table, grouped by
 lifecycle state. Prefer the bundled script (fast, one pass); fall back to your
 own tools where it can't run, so this works on Linux, macOS, and Windows. View,
-bootstrap and migrate only — never move, rename, or create plan files.
+bootstrap, migrate and reorder the Next list only — never move, rename, or create
+plan files.
 
 ## 1. Pick the scope from the user's phrasing
 
@@ -209,8 +210,28 @@ under an older plugin (0.4.x): it lists those plans under "Designed, not
 started" and adds no drift (for bare backticked slugs, as migration writes them;
 a path entry shows as undocumented there).
 
+## Change the order (on request)
+
+When the user asks to change what comes next ("put the search plan next", "move
+export above search", "take dark mode off the list"), edit **only** the numbered
+list under the `next — in order` heading in `plans/README.md`. The request is the
+approval; don't ask again.
+
+1. No such heading yet → do **Migrate (pre-0.5 board)** first (its own approval).
+2. Match the user's words to a plan file (slug or title). Ambiguous → ask. The plan
+   must be in `backlog/` — the section only shows backlog plans; for a plan in
+   another state, say where it is and change nothing.
+3. Insert, move or remove its item: `` `<slug>` `` first, then the why the user
+   gave after the list's own separator (keep an existing item's why when moving
+   it). Renumber from 1; replace or drop a `*(none)*` line.
+4. Re-render with `--scope next` and relay the table verbatim.
+
+Never move plan files here: starting a plan is the user's job (or their
+plan-running tools'). A started plan leaves the section by itself.
+
 ## Out of scope
 
-View, bootstrap and migrate only. Migration edits only `plans/README.md`, and
-only after explicit approval. Do NOT move plans between states, rename them, or
+View, bootstrap, migrate and reorder only. Migration edits only `plans/README.md`,
+and only after explicit approval; reordering edits only the Next list, on the
+user's request. Do NOT move plans between states, rename them, or
 create individual plan files — that is the user's job.
