@@ -37,7 +37,9 @@ an old-style bold "next … order" list are flagged as `plans/README.md` drift
 rows (full scope only), while prose and a bold line with no list are not. A
 frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)
 reads the template and a migrated board with no drift, so old installs keep
-working. Pure Python, no LLM. Run with
+working. A code fence or a stray backtick no longer hides later backticked
+mentions (which used to show as false "undocumented" drift). Pure Python, no
+LLM. Run with
 `pytest tests/test_status_board.py`.
 
 ## md-optimize — undo store

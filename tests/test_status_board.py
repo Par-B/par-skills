@@ -310,7 +310,18 @@ def test_bold_line_not_flagged(tmp_path, body):
     readme = "\n".join(["# Plans", "", "## ⏭ next — in order", "",
                         "## ⚪ backlog", ""] + body + ["", "- `a`", ""])
     r = _board(tmp_path, readme, ["backlog/a"])
-    assert not any("plans/README.md" in ln for ln in _run(r))
+    assert "| **⚠️ Drift** | |" not in _run(r)
+
+
+@pytest.mark.parametrize("block", [
+    ["```bash", "python3 run.py --plan `x`", "```"],
+    ["A stray ` backtick in prose."],
+], ids=["fence", "stray-backtick"])
+def test_backtick_pairing_stays_on_one_line(tmp_path, block):
+    readme = "\n".join(["# Plans", "", "## ⏭ next — in order", "",
+                        "## ⚪ backlog", ""] + block + ["", "- `a`", "- `b`", ""])
+    r = _board(tmp_path, readme, ["backlog/a", "backlog/b"])
+    assert "| **⚠️ Drift** | |" not in _run(r)
 
 
 def test_first_next_heading_wins(tmp_path):

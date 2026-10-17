@@ -67,7 +67,9 @@ DRIFT_UNDOCUMENTED_STATES = ["active", "backlog", "future-ideas"]
 ARCHIVE_NAME = "ARCHIVE.md"
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
 MD_TOKEN_RE = re.compile(r"[\w.\-{},]+\.md")          # may contain a {a,b} group
-BACKTICK_RE = re.compile(r"`([^`]+)`")
+# Pairs stay on one line, so a ``` fence or a stray backtick can't shift the
+# pairing of every backtick after it (slugs never wrap).
+BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 FUTURE_PREFIX_RE = re.compile(r"^future(\s+ideas?)?\s*[:—-]\s*", re.I)
 HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 NEXT_WORD_RE = re.compile(r"\bnext\b", re.I)
