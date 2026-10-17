@@ -22,6 +22,26 @@ conflicting rules, an empty ask list, every `autoMode` list starting with
 `test_my_commits.py` exercises the `my-commits` script against throwaway git
 repos. Run with `pytest tests/test_my_commits.py`.
 
+## status-board
+
+`test_status_board.py` runs `status_board.py` against throwaway `plans/` trees,
+covering the "Next, in order" section: no heading leaves the board as before;
+entries still in `backlog/` show in list order, renumbered, and leave "Designed,
+not started"; entries that moved to another state are skipped; an entry with no
+file is drift (full scope only); an empty list shows `*(none)*`; the `next`
+scope shows the section and `active` does not; the heading match is loose, ends
+at the next heading and skips fenced code; only top-level items count (nested
+bullets are ignored), an item may name its plan by path or `.md` link, and
+commented-out items are skipped. Migration: a board without the heading and
+an old-style bold "next … order" list are flagged as `plans/README.md` drift
+rows (full scope only), while prose and a bold line with no list are not. A
+frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)
+reads the template and a migrated board with no drift, so old installs keep
+working. A code fence or a stray backtick no longer hides later backticked
+mentions (which used to show as false "undocumented" drift). Pure Python, no
+LLM. Run with
+`pytest tests/test_status_board.py`.
+
 ## md-optimize — undo store
 
 `test_md_optimize_history.py` exercises the snapshot/undo/prune helper

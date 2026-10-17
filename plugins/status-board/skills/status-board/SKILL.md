@@ -1,14 +1,14 @@
 ---
 name: status-board
-description: Use when the user asks to see project status, the status board, what's in progress vs. done, or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do.
+description: Use when the user asks to see project status, the status board, what's in progress vs. done, what's next or the priorities (next in order), or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do.
 ---
 
 # Status Board
 
 Render a repo's `plans/` directory as a single status-board table, grouped by
 lifecycle state. Prefer the bundled script (fast, one pass); fall back to your
-own tools where it can't run, so this works on Linux, macOS, and Windows. View
-and bootstrap only — never move, rename, or create plan files.
+own tools where it can't run, so this works on Linux, macOS, and Windows. View,
+bootstrap and migrate only — never move, rename, or create plan files.
 
 ## 1. Pick the scope from the user's phrasing
 
@@ -16,7 +16,7 @@ and bootstrap only — never move, rename, or create plan files.
 |---|---|
 | "status", "status board", "everything", or anything unclear | `full` |
 | "active", "in flight", "in progress", "running" | `active` |
-| "what's next", "not started", "backlog", "upcoming" | `next` |
+| "what's next", "next in order", "priorities", "not started", "backlog", "upcoming" | `next` |
 | "future ideas", "ideas", "someday" | `ideas` |
 | "done", "shipped", "finished" | `done` |
 | "won't do", "rejected", "dropped" | `wontdo` |
@@ -46,6 +46,8 @@ Read its output:
 - A Markdown table → **relay it verbatim**. Do not re-read plan files, reformat,
   summarize, or truncate it.
 - `NO_BOARD` (exit 3) → go to **Bootstrap**.
+- A table whose **⚠️ Drift** has `plans/README.md` migration rows → relay it
+  verbatim, then go to **Migrate (pre-0.5 board)**.
 - `command not found` → retry once with `python` instead of `python3`; if that
   also fails, use the **Portable fallback** below.
 
@@ -58,8 +60,9 @@ board yourself, applying the **Rules & format** below with `Glob`/`Read`:
 1. Find the repo root (`git rev-parse --show-toplevel`, else current dir). If
    `plans/` or `plans/README.md` is missing → **Bootstrap**.
 2. `Glob` each in-scope state dir for `*.md` (exclude `README.md`, `*.tasks.json`).
-3. `Read` `plans/README.md` once for per-plan notes; also `Read`
-   `plans/ARCHIVE.md` if it exists (README notes win on a collision). For
+3. `Read` `plans/README.md` once for per-plan notes and its `next — in order`
+   list (any heading with the words next and order — see Rules & format); also
+   `Read` `plans/ARCHIVE.md` if it exists (README notes win on a collision). For
    `archive` scope, relay `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
 4. Only for plans with no README/ARCHIVE note, `Read` that file for a title.
 
@@ -93,26 +96,50 @@ absent, everything behaves exactly as a single-file board.
   README notes win when a plan appears in both. If still no note, use the plan
   file's first meaningful heading (skip generic ones like "Problem", "What",
   "Summary"; strip a leading "Future:"). Truncate to ~150 chars.
+- **Next, in order** (`full` and `next` scopes): an optional list under a
+  README heading holding the words "next" and "order" (any level, emoji or case;
+  canonically `## ⏭ next — in order`), running to the next heading. Each
+  unindented list item (`-`, `*`, `+`, `1.` or `1)`) names one plan by the first
+  backticked text or `.md` filename/link in it, whichever comes first — any
+  backticked text counts, even one that isn't a plan; a path reduces to its
+  filename without `.md`; no `{a,b}` brace expansion here. A repeated entry
+  counts once. Indented items, other lines, HTML comment lines and fenced code
+  are ignored. Show only entries whose plan is in `backlog/`, in list order,
+  numbered 1, 2, 3… across the shown entries (the README's own numbers are
+  ignored; `| 1. <slug> | <description> |`), and drop them from
+  "Designed, not started". Skip entries whose plan is in any other state. No
+  heading → no section; heading but no live entries → `*(none)*`.
 - Drift (**`full` scope only**): a **missing README note is drift only for
   current work** — on-disk files under `active`/`backlog`/`future-ideas` absent
   from README → *undocumented*. Do **not** flag un-annotated `done`/`wont-do`
   files (an archived plan needs no note — the folder + git is the record). In
   the other direction, README plan rows with no file → *stale*, for **any**
   section (a dangling reference is always an error).
+  A next-order entry matching no plan file in any state → `in next-order list,
+  no file`; these rows come after the undocumented and stale rows, in list
+  order. A slug in that list counts as documented.
+  Migration rows, named `plans/README.md`, come last: no `next … order`
+  heading → `no "next — in order" section (pre-0.5 board) — migrate`; each
+  old-style list (a non-list line starting in bold whose bold text holds "next"
+  and "order", followed by an unindented list item naming a plan, as in the Next
+  rules, before the next heading) → `old-style next list at line N — move under
+  "next — in order"`.
 - `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
   Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
   one-row `*(none)*` table. Relay whatever it prints verbatim.
 - Output is ONE Markdown table. Each in-scope state is a bold section-header row
   with an empty second cell; plan rows follow, plain (name = filename without
   `.md`; escape `|`). Empty in-scope section → one `*(none)*` row. Order: In
-  flight → Designed-not-started → Future ideas → Last 2 done → Last 2 won't-do →
-  Drift. Example:
+  flight → Next, in order → Designed-not-started → Future ideas → Last 2 done →
+  Last 2 won't-do → Drift. Example:
 
   ```
   | Plan | Description |
   |---|---|
   | **🔵 In flight** | |
   | 2026-05-01-some-plan-design | one-line description |
+  | **⏭ Next, in order** | |
+  | 1. 2026-05-02-other-plan | one-line description |
   | **⚪ Designed, not started** | |
   | *(none)* | |
   ```
@@ -141,7 +168,49 @@ Use those five names exactly — `wont-do` (hyphen), NOT `wontdo`. Without Bash,
 do the same with your own tools: create the dirs and `Write` the README from the
 template file's contents. Then render the (empty) board.
 
+## Migrate (pre-0.5 board)
+
+Boards made before 0.5 have no `## ⏭ next — in order` section, and some wrote
+their order as a bold "next … order" line followed by a list. The board's
+**⚠️ Drift** shows `plans/README.md` migration rows for both (see Rules &
+format). After relaying a board that has them, offer once per render; after a
+decline, don't offer again in this conversation:
+
+> "This board predates the "Next, in order" section. Add it to
+> `plans/README.md`, moving the old list from line N?" (several lists → "lines
+> N, M"; drop the "moving" clause when there is no old-style list)
+
+On explicit approval, edit `plans/README.md` with your own tools:
+
+1. Insert the template's section (the `## ⏭ next — in order` heading, its
+   comment and `*(none)*`, from `references/readme-template.md`) directly
+   before the backlog heading; with no backlog heading, after the active
+   section; with neither, at the end. Keep a blank line on each side.
+2. For each old-style list: move its items under the new heading as a numbered
+   list, one plan per item, each starting with the backticked slug, then its
+   why-text after the list's own separator (e.g. `: `); renumber from 1; remove
+   the `*(none)*` line.
+   - Split "A, then B" into two items: A keeps the shared why; B gets "after A"
+     (A's backticked slug) plus the shared why.
+   - Items whose plan isn't in `backlog/` move as-is (the board skips them).
+   - Context the bold line carried (who decided, when, a condition) becomes one
+     plain sentence after the template comment, before the list (backticked
+     slugs there are fine — only list items are entries).
+   - A prose line that only refers to the old list (e.g. "The rest of the
+     backlog waits behind these.") moves under the list.
+   - Delete the bold line, its continuation lines and the old list.
+   - If the list after the bold line is plainly not an order list (e.g. the
+     backlog index itself), stop and tell the user instead of moving it.
+3. Re-run the script: the migration rows must be gone.
+
+Change nothing else. After migration the heading is the only format: the script
+never renders old-style lists, it only flags them. Migrated boards still render
+under an older plugin (0.4.x): it lists those plans under "Designed, not
+started" and adds no drift (for bare backticked slugs, as migration writes them;
+a path entry shows as undocumented there).
+
 ## Out of scope
 
-View + bootstrap only. Do NOT move plans between states, rename them, or create
-individual plan files — that is the user's job.
+View, bootstrap and migrate only. Migration edits only `plans/README.md`, and
+only after explicit approval. Do NOT move plans between states, rename them, or
+create individual plan files — that is the user's job.

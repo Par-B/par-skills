@@ -29,7 +29,7 @@ Update later with `/plugin marketplace update par-plugins`.
 
 | Plugin | Invoke | What it does |
 |---|---|---|
-| `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
+| `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, next in order, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
 | `md-optimize` | `/md-optimize:md-optimize` (or "optimize my CLAUDE.md") | Analyzes an AI-instructions file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`, global or project — plus any files it `@imports`) against the **current session** and interactively improves it through four lenses — effectiveness (contradictions, vague/inaccurate rules, gaps the session exposed), token efficiency (verbosity, redundancy, dead rules), cross-file overlap (a project or imported file duplicating/conflicting with a global one), and privacy (secrets, confidential info, and personal names/contact — including your own — flagged by exposure). Also scans a repo for **skill files** (`SKILL.md`) and optimizes chosen ones with a skill-authoring lens (`description`-as-triggers, no `@`-imports, concise body). Proposes changes one at a time; applies only the ones you approve, with a keep/redact/move/delete/acknowledge menu for privacy findings. **Snapshots every run before editing**, so you can undo/revert later ("undo my last md-optimize") and prune old history ("keep the last 10"). Ships snapshot/undo/prune and `@import`-resolver scripts; only its safe commands auto-approve (a scoped hook) — `restore`/`prune` always prompt, and edits are guarded to resolved `.md` files only. |
 
@@ -159,7 +159,8 @@ What this means:
   own read-only script; `md-optimize`'s hook auto-approves *only* its safe
   subcommands (verified by `shlex` parsing, not a substring match).
 - **Destructive actions still prompt.** `status-board`'s `plans/` bootstrap
-  (`mkdir`/`touch`/`cp`) is not auto-approved; `my-commits` never writes; and
+  (`mkdir`/`touch`/`cp`) and its pre-0.5 `plans/README.md` migration are not
+  auto-approved; `my-commits` never writes; and
   `md-optimize`'s file-overwriting `restore` and snapshot-deleting `prune` always
   ask.
 
@@ -178,7 +179,8 @@ all are stdlib-only. What each touches:
 - Standard library only: `argparse`, `os`, `re`, `sys`. No third-party packages.
 - Read-only: reads `plans/`, prints a table; never writes, deletes, shells out,
   `eval`/`exec`s, or networks. (The separate `plans/` bootstrap that creates files
-  is plain `mkdir`/`cp` and is **not** auto-approved — it prompts.)
+  is plain `mkdir`/`cp`, and the migration edits `plans/README.md` with the
+  agent's own tools; neither is auto-approved — both prompt.)
 
 **`my-commits` — `my_commits.py`**
 - Standard library only: `argparse`, `subprocess`, `sys`, `datetime`.
