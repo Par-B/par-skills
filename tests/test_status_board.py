@@ -8,7 +8,7 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = str(REPO / "plugins/status-board/skills/status-board/scripts/status_board.py")
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
-NEXT = "⏭ Next, in order"
+NEXT = "⚪ Not started: next, in order"
 BACKLOG = "⚪ Designed, not started"
 TEMPLATE = REPO / "plugins/status-board/skills/status-board/references/readme-template.md"
 OLD_SCRIPT = str(REPO / "tests/fixtures/status_board/status_board_0_4_0.py")
@@ -32,7 +32,7 @@ def _board(root, readme, files=()):
     return root
 
 
-def _readme(next_items=None, mentions=(), heading="## ⏭ next — in order"):
+def _readme(next_items=None, mentions=(), heading="## ⚪ not started — next, in order"):
     """README text: an optional next-order section, then a backlog section that
     mentions `mentions` as backticked slugs (so they are documented)."""
     parts = ["# Plans", ""]
@@ -125,6 +125,12 @@ def test_active_scope_omits_next(tmp_path):
 def test_slug_in_next_list_counts_as_documented(tmp_path):
     r = _board(tmp_path, _readme(["a"]), ["backlog/a"])
     assert not any("undocumented" in ln for ln in _run(r))
+
+
+def test_pre_061_heading_still_matched(tmp_path):
+    r = _board(tmp_path, _readme(["a"], mentions=["a"], heading="## ⏭ next — in order"),
+               ["backlog/a"])
+    assert _section(_run(r), NEXT) == ["| 1. a | Title of a |"]
 
 
 def test_heading_matched_loosely(tmp_path):

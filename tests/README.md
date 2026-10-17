@@ -25,11 +25,12 @@ repos. Run with `pytest tests/test_my_commits.py`.
 ## status-board
 
 `test_status_board.py` runs `status_board.py` against throwaway `plans/` trees,
-covering the "Next, in order" section: no heading leaves the board as before;
+covering the "Not started: next, in order" section: no heading leaves the board as before;
 entries still in `backlog/` show in list order, renumbered, and leave "Designed,
 not started"; entries that moved to another state are skipped; an entry with no
 file is drift (full scope only); an empty list shows `*(none)*`; the `next`
-scope shows the section and `active` does not; the heading match is loose, ends
+scope shows the section and `active` does not; the heading match is loose (the
+pre-0.6.1 `## ⏭ next — in order` heading still matches), ends
 at the next heading and skips fenced code; only top-level items count (nested
 bullets are ignored), an item may name its plan by path or `.md` link, and
 commented-out items are skipped. Migration: a board without the heading and

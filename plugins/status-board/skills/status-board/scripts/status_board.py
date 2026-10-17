@@ -7,7 +7,7 @@ for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
 to each plan file's title. Drift between folders and README is flagged, as
 are pre-0.5 boards (no "next — in order" heading, or an old bold "next … order"
 list) so the skill can offer migration. An optional "next — in order" list in
-README.md becomes a "Next, in order" section drawn from backlog/.
+README.md becomes a "Not started: next, in order" section drawn from backlog/.
 
 Two-tier archive: README.md is the CURRENT board (active/backlog/future-ideas +
 recently-done for the current+previous release). Older done/wont-do descriptions
@@ -42,7 +42,7 @@ import sys
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 HEADERS = {
     "active": "🔵 In flight",
-    "next": "⏭ Next, in order",
+    "next": "⚪ Not started: next, in order",
     "backlog": "⚪ Designed, not started",
     "future-ideas": "💡 Future ideas",
     "done": "🟢 Last 2 done",
@@ -364,7 +364,7 @@ def main():
         arch_notes, _, _ = parse_readme(archive_path)
         for k, v in arch_notes.items():
             notes.setdefault(k, v)
-    # Next, in order: the README's ordered list, kept to plans still in backlog/
+    # Not started: next, in order — the README's ordered list, kept to plans still in backlog/
     # and numbered by position. None = no heading, so no section at all.
     next_order, legacy_next = parse_next_order(readme)
     # List entries count as documented by their reduced slug (`backlog/foo` -> foo).

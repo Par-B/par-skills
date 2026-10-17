@@ -30,7 +30,7 @@ that carries a one-line note per plan.
 
 *(none)*
 
-## ⏭ next — in order
+## ⚪ not started — next, in order
 
 <!-- Optional: the next few backlog plans, in the order to do them. One numbered
 item per plan: its backticked filename without the extension, then a short why.
@@ -48,6 +48,7 @@ The board shows the ones still in backlog/, renumbered from 1. -->
 
 ## 🟢 done — shipped
 
+- `2026-10-17-status-board-next-label-says-not-started-design` — status-board 0.6.1: the board header becomes `⚪ Not started: next, in order` and the template heading `## ⚪ not started — next, in order`; old `⏭` headings still match.
 - `2026-10-17-status-board-next-order-design` — status-board 0.5.0: "Next, in order" section, migration for pre-0.5 boards, 0.4.x compatibility; PR #7, merged 2026-10-17.
 - `2026-10-17-status-board-next-order-plan` — its implementation plan (4 tasks, each reviewed).
 
