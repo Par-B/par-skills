@@ -7,8 +7,8 @@ description: Use when the user asks to see project status, the status board, wha
 
 Render a repo's `plans/` directory as a single status-board table, grouped by
 lifecycle state. Prefer the bundled script (fast, one pass); fall back to your
-own tools where it can't run, so this works on Linux, macOS, and Windows. View
-and bootstrap only — never move, rename, or create plan files.
+own tools where it can't run, so this works on Linux, macOS, and Windows. View,
+bootstrap and migrate only — never move, rename, or create plan files.
 
 ## 1. Pick the scope from the user's phrasing
 
@@ -197,5 +197,6 @@ started" and reports no drift.
 
 ## Out of scope
 
-View + bootstrap only. Do NOT move plans between states, rename them, or create
-individual plan files — that is the user's job.
+View, bootstrap and migrate only. Migration edits only `plans/README.md`, and
+only after explicit approval. Do NOT move plans between states, rename them, or
+create individual plan files — that is the user's job.

@@ -159,7 +159,8 @@ What this means:
   own read-only script; `md-optimize`'s hook auto-approves *only* its safe
   subcommands (verified by `shlex` parsing, not a substring match).
 - **Destructive actions still prompt.** `status-board`'s `plans/` bootstrap
-  (`mkdir`/`touch`/`cp`) is not auto-approved; `my-commits` never writes; and
+  (`mkdir`/`touch`/`cp`) and its pre-0.5 `plans/README.md` migration are not
+  auto-approved; `my-commits` never writes; and
   `md-optimize`'s file-overwriting `restore` and snapshot-deleting `prune` always
   ask.
 
@@ -178,7 +179,8 @@ all are stdlib-only. What each touches:
 - Standard library only: `argparse`, `os`, `re`, `sys`. No third-party packages.
 - Read-only: reads `plans/`, prints a table; never writes, deletes, shells out,
   `eval`/`exec`s, or networks. (The separate `plans/` bootstrap that creates files
-  is plain `mkdir`/`cp` and is **not** auto-approved — it prompts.)
+  is plain `mkdir`/`cp`, and the migration edits `plans/README.md` with the
+  agent's own tools; neither is auto-approved — both prompt.)
 
 **`my-commits` — `my_commits.py`**
 - Standard library only: `argparse`, `subprocess`, `sys`, `datetime`.
