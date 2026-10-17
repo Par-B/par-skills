@@ -59,9 +59,9 @@ board yourself, applying the **Rules & format** below with `Glob`/`Read`:
    `plans/` or `plans/README.md` is missing → **Bootstrap**.
 2. `Glob` each in-scope state dir for `*.md` (exclude `README.md`, `*.tasks.json`).
 3. `Read` `plans/README.md` once for per-plan notes and its `next — in order`
-   list (if that heading exists); also `Read` `plans/ARCHIVE.md` if it exists
-   (README notes win on a collision). For `archive` scope, relay
-   `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
+   list (any heading with the words next and order — see Rules & format); also
+   `Read` `plans/ARCHIVE.md` if it exists (README notes win on a collision). For
+   `archive` scope, relay `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
 4. Only for plans with no README/ARCHIVE note, `Read` that file for a title.
 
 ## Two-tier archive (README.md + ARCHIVE.md)
@@ -97,10 +97,14 @@ absent, everything behaves exactly as a single-file board.
 - **Next, in order** (`full` and `next` scopes): an optional list under a
   README heading holding the words "next" and "order" (any level, emoji or case;
   canonically `## ⏭ next — in order`), running to the next heading. Each
-  top-level list item names one plan by its first backticked slug or `.md` link
-  (a path counts by its filename); nested items, HTML comments and fenced code
+  unindented list item (`-`, `*`, `+`, `1.` or `1)`) names one plan by the first
+  backticked text or `.md` filename/link in it, whichever comes first — any
+  backticked text counts, even one that isn't a plan; a path reduces to its
+  filename without `.md`; no `{a,b}` brace expansion here. A repeated entry
+  counts once. Indented items, other lines, HTML comment lines and fenced code
   are ignored. Show only entries whose plan is in `backlog/`, in list order,
-  numbered by position (`| 1. <slug> | <description> |`), and drop them from
+  numbered 1, 2, 3… across the shown entries (the README's own numbers are
+  ignored; `| 1. <slug> | <description> |`), and drop them from
   "Designed, not started". Skip entries whose plan is in any other state. No
   heading → no section; heading but no live entries → `*(none)*`.
 - Drift (**`full` scope only**): a **missing README note is drift only for
@@ -110,7 +114,8 @@ absent, everything behaves exactly as a single-file board.
   the other direction, README plan rows with no file → *stale*, for **any**
   section (a dangling reference is always an error).
   A next-order entry matching no plan file in any state → `in next-order list,
-  no file`. A slug in that list counts as documented.
+  no file`; these rows come after the undocumented and stale rows, in list
+  order. A slug in that list counts as documented.
 - `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
   Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
   one-row `*(none)*` table. Relay whatever it prints verbatim.

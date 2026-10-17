@@ -345,6 +345,8 @@ def main():
     # Next, in order: the README's ordered list, kept to plans still in backlog/
     # and numbered by position. None = no heading, so no section at all.
     next_order = parse_next_order(readme)
+    # List entries count as documented by their reduced slug (`backlog/foo` -> foo).
+    documented.update(next_order or [])
     backlog_dir = os.path.join(plans, "backlog")
     backlog_stems = {stem(f) for f in plan_files(backlog_dir)}
     next_live = [s for s in (next_order or []) if s in backlog_stems]

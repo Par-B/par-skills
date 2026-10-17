@@ -190,3 +190,11 @@ def test_template_board_has_empty_next_section(tmp_path):
     lines = _run(r)
     assert _section(lines, NEXT) == ["| *(none)* | |"]
     assert "| **⚠️ Drift** | |" not in lines
+
+
+def test_backticked_path_entry_counts_as_documented(tmp_path):
+    readme = "# Plans\n\n## ⏭ next — in order\n\n1. `backlog/foo`: why\n"
+    r = _board(tmp_path, readme, ["backlog/foo"])
+    lines = _run(r)
+    assert _section(lines, NEXT) == ["| 1. foo | Title of foo |"]
+    assert not any("undocumented" in ln for ln in lines)
