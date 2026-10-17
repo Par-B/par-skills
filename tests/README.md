@@ -22,6 +22,17 @@ conflicting rules, an empty ask list, every `autoMode` list starting with
 `test_my_commits.py` exercises the `my-commits` script against throwaway git
 repos. Run with `pytest tests/test_my_commits.py`.
 
+## status-board
+
+`test_status_board.py` runs `status_board.py` against throwaway `plans/` trees,
+covering the "Next, in order" section: no heading leaves the board as before;
+entries still in `backlog/` show in list order, renumbered, and leave "Designed,
+not started"; entries that moved to another state are skipped; an entry with no
+file is drift (full scope only); an empty list shows `*(none)*`; the `next`
+scope shows the section and `active` does not; the heading match is loose, ends
+at the next heading and skips fenced code. Pure Python, no LLM. Run with
+`pytest tests/test_status_board.py`.
+
 ## md-optimize — undo store
 
 `test_md_optimize_history.py` exercises the snapshot/undo/prune helper

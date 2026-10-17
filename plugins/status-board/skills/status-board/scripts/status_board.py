@@ -4,7 +4,9 @@
 One process, one tool round trip — independent of plan count. The folder tree is
 the source of truth; descriptions are enriched from plans/README.md notes (and,
 for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
-to each plan file's title. Drift between folders and README is flagged.
+to each plan file's title. Drift between folders and README is flagged. An
+optional "next — in order" list in README.md becomes a "Next, in order" section
+drawn from backlog/.
 
 Two-tier archive: README.md is the CURRENT board (active/backlog/future-ideas +
 recently-done for the current+previous release). Older done/wont-do descriptions
@@ -18,8 +20,8 @@ Exit codes: 0 = board rendered, 3 = no board found (caller should offer bootstra
 Security properties (for auditors — each is verifiable against the code below):
   * Standard library only: imports argparse, os, re, sys. No third-party
     packages, no dynamic imports.
-  * Read-only: every open() below uses the default read mode (see parse_readme
-    and fallback_desc). The script never writes, creates, deletes, or renames
+  * Read-only: every open() below uses the default read mode (see parse_readme,
+    parse_next_order and fallback_desc). The script never writes, creates, deletes, or renames
     anything on disk.
   * No code execution: no subprocess / os.system / eval / exec / compile /
     __import__. File contents are read as text and pattern-matched only — never
@@ -39,15 +41,18 @@ import sys
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 HEADERS = {
     "active": "🔵 In flight",
+    "next": "⏭ Next, in order",
     "backlog": "⚪ Designed, not started",
     "future-ideas": "💡 Future ideas",
     "done": "🟢 Last 2 done",
     "wont-do": "🚫 Last 2 won't-do",
 }
+# "next" is a pseudo-state: the ordered list under README's "next — in order"
+# heading, drawn from backlog/. It is not a folder, so STATES omits it.
 SCOPES = {
-    "full": ["active", "backlog", "future-ideas", "done", "wont-do"],
+    "full": ["active", "next", "backlog", "future-ideas", "done", "wont-do"],
     "active": ["active"],
-    "next": ["backlog", "future-ideas"],
+    "next": ["next", "backlog", "future-ideas"],
     "ideas": ["future-ideas"],
     "done": ["done"],
     "wontdo": ["wont-do"],
@@ -63,6 +68,10 @@ DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
 MD_TOKEN_RE = re.compile(r"[\w.\-{},]+\.md")          # may contain a {a,b} group
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 FUTURE_PREFIX_RE = re.compile(r"^future(\s+ideas?)?\s*[:—-]\s*", re.I)
+HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
+NEXT_WORD_RE = re.compile(r"\bnext\b", re.I)
+ORDER_WORD_RE = re.compile(r"\border\b", re.I)
+LIST_ITEM_RE = re.compile(r"^\s*(?:\d+[.)]|[-*+])\s+(.*)$")
 GENERIC_HEADINGS = {
     "future ideas", "future", "ideas", "overview", "summary", "problem",
     "what", "why", "background", "motivation", "goal", "goals", "context",
@@ -174,6 +183,43 @@ def parse_readme(path):
     return notes, documented, table
 
 
+def parse_next_order(path):
+    """Read plans/README.md (read-only) and return the slugs listed under its
+    "next — in order" heading, in order — or None when there is no such heading.
+
+    A heading counts if it holds the words "next" and "order" (any level, emoji
+    or case). The section runs to the next heading. Each list item names one
+    plan by its first backticked slug; fenced code is skipped. Text parsing only."""
+    try:
+        # Read-only: parse the README as text. Contents are pattern-matched only.
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().replace("\r\n", "\n").split("\n")
+    except OSError:
+        return None
+    order, inside, fenced = None, False, False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("```") or s.startswith("~~~"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        m = HEADING_RE.match(s)
+        if m:
+            if inside:
+                break
+            if NEXT_WORD_RE.search(m.group(1)) and ORDER_WORD_RE.search(m.group(1)):
+                inside, order = True, []
+            continue
+        item = LIST_ITEM_RE.match(line) if inside else None
+        bt = BACKTICK_RE.search(item.group(1)) if item else None
+        if bt:
+            slug = stem(bt.group(1).strip())
+            if slug and slug not in order:
+                order.append(slug)
+    return order
+
+
 def fallback_desc(path):
     """Derive a one-line description from a plan file (read-only): its first
     non-generic heading, else its first prose line. Contents parsed as text only."""
@@ -274,11 +320,29 @@ def main():
         arch_notes, _, _ = parse_readme(archive_path)
         for k, v in arch_notes.items():
             notes.setdefault(k, v)
+    # Next, in order: the README's ordered list, kept to plans still in backlog/
+    # and numbered by position. None = no heading, so no section at all.
+    next_order = parse_next_order(readme)
+    backlog_dir = os.path.join(plans, "backlog")
+    backlog_stems = {stem(f) for f in plan_files(backlog_dir)}
+    next_live = [s for s in (next_order or []) if s in backlog_stems]
     rows = ["| Plan | Description |", "|---|---|"]
 
     for state in SCOPES[args.scope]:
+        if state == "next":
+            if next_order is None:
+                continue
+            rows.append(f"| **{HEADERS[state]}** | |")
+            if not next_live:
+                rows.append("| *(none)* | |")
+            for i, s in enumerate(next_live, 1):
+                desc = describe(s + ".md", backlog_dir, notes)
+                rows.append(f"| {i}. {esc(s)} | {esc(desc)} |")
+            continue
         d = os.path.join(plans, state)
         files = plan_files(d)
+        if state == "backlog":
+            files = [f for f in files if stem(f) not in next_live]
         if state in ("done", "wont-do"):
             files = sorted(files, key=date_sort_key, reverse=True)[:2]
         rows.append(f"| **{HEADERS[state]}** | |")
@@ -302,12 +366,17 @@ def main():
         undocumented = sorted(on_disk_current - documented)
         # Stale (README row with no file) is a real error anywhere — all dirs.
         stale = sorted(table_stems - on_disk)
-        if undocumented or stale:
+        # Next-order entries that match no plan in any state (typo or rename).
+        # Entries whose plan moved on to active/done/... are skipped silently.
+        next_missing = [s for s in (next_order or []) if s not in on_disk]
+        if undocumented or stale or next_missing:
             rows.append("| **⚠️ Drift** | |")
             for s in undocumented:
                 rows.append(f"| {esc(s)} | undocumented (in folder, not in README) |")
             for s in stale:
                 rows.append(f"| {esc(s)} | stale (in README, no file) |")
+            for s in next_missing:
+                rows.append(f"| {esc(s)} | in next-order list, no file |")
 
     print("\n".join(rows))
     return 0
