@@ -46,6 +46,8 @@ Read its output:
 - A Markdown table → **relay it verbatim**. Do not re-read plan files, reformat,
   summarize, or truncate it.
 - `NO_BOARD` (exit 3) → go to **Bootstrap**.
+- A table whose **⚠️ Drift** has `plans/README.md` migration rows → relay it
+  verbatim, then go to **Migrate (pre-0.5 board)**.
 - `command not found` → retry once with `python` instead of `python3`; if that
   also fails, use the **Portable fallback** below.
 
@@ -171,29 +173,36 @@ template file's contents. Then render the (empty) board.
 Boards made before 0.5 have no `## ⏭ next — in order` section, and some wrote
 their order as a bold "next … order" line followed by a list. The board's
 **⚠️ Drift** shows `plans/README.md` migration rows for both (see Rules &
-format). After relaying a board that has them, offer once:
+format). After relaying a board that has them, offer once per render; after a
+decline, don't offer again in this conversation:
 
 > "This board predates the "Next, in order" section. Add it to
-> `plans/README.md`, moving the old list from line N?" (drop the "moving"
-> clause when there is no old-style list)
+> `plans/README.md`, moving the old list from line N?" (several lists → "lines
+> N, M"; drop the "moving" clause when there is no old-style list)
 
 On explicit approval, edit `plans/README.md` with your own tools:
 
 1. Insert the template's section (the `## ⏭ next — in order` heading, its
    comment and `*(none)*`, from `references/readme-template.md`) directly
-   before the backlog heading.
+   before the backlog heading; with no backlog heading, after the active
+   section; with neither, at the end.
 2. For each old-style list: move its items under the new heading as a numbered
-   list, one plan per item — split "A, then B" into two items — each starting
-   with the backticked slug, then its why-text; remove the `*(none)*` line. Keep
-   any context the bold line carried (who decided, when, a condition) as one
-   plain sentence above the list. Delete the bold line, its continuation lines
-   and the old list.
+   list, one plan per item, each starting with the backticked slug, then its
+   why-text; remove the `*(none)*` line.
+   - Split "A, then B" into two items: A keeps the shared why; B gets "after A"
+     plus the shared why.
+   - Items whose plan isn't in `backlog/` move as-is (the board skips them).
+   - Context the bold line carried (who decided, when, a condition) becomes one
+     plain sentence after the template comment, before the list.
+   - A prose line that only refers to the old list (e.g. "The rest of the
+     backlog waits behind these.") moves under the list.
+   - Delete the bold line, its continuation lines and the old list.
 3. Re-run the script: the migration rows must be gone.
 
 Change nothing else. After migration the heading is the only format: the script
 never renders old-style lists, it only flags them. Migrated boards still render
 under an older plugin (0.4.x): it lists those plans under "Designed, not
-started" and reports no drift.
+started" and adds no drift.
 
 ## Out of scope
 

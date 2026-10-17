@@ -3,6 +3,8 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = str(REPO / "plugins/status-board/skills/status-board/scripts/status_board.py")
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
@@ -280,3 +282,49 @@ def test_old_script_reads_migrated_board(tmp_path):
     assert f"| **{NEXT}** | |" not in lines
     assert "| **⚠️ Drift** | |" not in lines
     assert _section(lines, BACKLOG) == ["| a | Title of a |", "| b | Title of b |"]
+
+
+def test_underscore_bold_flagged(tmp_path):
+    readme = "# Plans\n\n## ⚪ backlog\n\n__Next in order__\n\n1. `a`: why\n"
+    r = _board(tmp_path, readme, ["backlog/a"])
+    assert _legacy_row(5) in _section(_run(r), "⚠️ Drift")
+
+
+def test_crlf_readme_flagged_at_right_line(tmp_path):
+    readme = "\r\n".join([
+        "# Plans", "",
+        "## ⏭ next — in order", "",
+        "1. `a`: why", "",
+        "## ⚪ backlog — not started", "",
+        "**Next, in this order**:", "",      # line 9
+        "1. `b`: old.", "",
+    ])
+    r = _board(tmp_path, "", ["backlog/a", "backlog/b"])
+    (r / "plans/README.md").write_bytes(readme.encode("utf-8"))
+    lines = _run(r)
+    assert _section(lines, NEXT) == ["| 1. a | Title of a |"]
+    assert _section(lines, "⚠️ Drift") == [_legacy_row(9)]
+
+
+@pytest.mark.parametrize("body", [
+    ["**Next, in this order**:", "", "### Later", "", "1. `a`: why"],
+    ["```", "**Next, in this order**:", "", "1. `a`: why", "```"],
+    ["<!--", "**Next, in this order**:", "", "1. `a`: why", "-->"],
+], ids=["heading-between", "fenced", "comment"])
+def test_bold_line_not_flagged(tmp_path, body):
+    readme = "\n".join(["# Plans", "", "## ⏭ next — in order", "",
+                        "## ⚪ backlog", ""] + body + ["", "- `a`", ""])
+    r = _board(tmp_path, readme, ["backlog/a"])
+    assert not any("plans/README.md" in ln for ln in _run(r))
+
+
+def test_first_next_heading_wins(tmp_path):
+    readme = "\n".join([
+        "# Plans", "",
+        "## ⏭ next — in order", "", "1. `a`: why", "",
+        "## Next, in order (again)", "", "1. `b`: why", "",
+    ]) + "\n"
+    r = _board(tmp_path, readme, ["backlog/a", "backlog/b"])
+    lines = _run(r)
+    assert _section(lines, NEXT) == ["| 1. a | Title of a |"]
+    assert _section(lines, BACKLOG) == ["| b | Title of b |"]

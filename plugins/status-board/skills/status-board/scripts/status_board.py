@@ -4,9 +4,10 @@
 One process, one tool round trip — independent of plan count. The folder tree is
 the source of truth; descriptions are enriched from plans/README.md notes (and,
 for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
-to each plan file's title. Drift between folders and README is flagged. An
-optional "next — in order" list in README.md becomes a "Next, in order" section
-drawn from backlog/.
+to each plan file's title. Drift between folders and README is flagged, as
+are pre-0.5 boards (no "next — in order" heading, or an old bold "next … order"
+list) so the skill can offer migration. An optional "next — in order" list in
+README.md becomes a "Next, in order" section drawn from backlog/.
 
 Two-tier archive: README.md is the CURRENT board (active/backlog/future-ideas +
 recently-done for the current+previous release). Older done/wont-do descriptions
