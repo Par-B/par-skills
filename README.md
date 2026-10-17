@@ -50,6 +50,31 @@ terminal:
 (Per-run alternative: prefix the command with `PYTHONUTF8=1`.) Linux and macOS
 default to UTF-8, so this only affects Windows.
 
+### status-board — ordering what's next (0.5+)
+
+The order of the next few plans lives in `plans/README.md`, under its own heading:
+
+```markdown
+## ⏭ next — in order
+
+1. `2026-10-16-meal-planner-plan`: the export needs a plan to export from.
+2. `2026-10-16-shopping-list-export-plan`: turns a week's plan into a list.
+```
+
+One numbered item per plan, named by its backticked filename (without `.md`),
+then a short why. The board shows those still in `backlog/` as **⏭ Next, in
+order**, right under "In flight", numbered by position; they leave "Designed, not
+started", which stays unordered. A plan you start drops out of the list on its
+own. Edit the list by hand or, from 0.6, just ask ("put the search plan next",
+"move export above search") and the skill edits it for you. No CLAUDE.md change
+is needed.
+
+**Upgrading from 0.4:** boards made before 0.5 have no such heading. The board
+flags them under ⚠️ Drift (`pre-0.5 board — migrate`) and the skill offers, once,
+to add the section — moving an old bold "Next, in this order" list under it if
+there is one. Say yes and that board is done; nothing changes until you do.
+Older installs (0.4.x) still read migrated boards.
+
 ### Try it
 
 After installing, just talk to Claude naturally — no slash command needed (these
@@ -58,6 +83,7 @@ phrases trigger the skill), or use the explicit `/plugin:skill` form.
 **`status-board`** (run inside a repo that has a `plans/` directory):
 - "show me the status"
 - "what's next?"
+- "put the search plan next" / "move export above search"
 - "show me the future ideas"
 - "what did I finish recently?"
 - *(in a repo with no `plans/` yet)* "show me the status" → it offers to set one up
@@ -159,8 +185,9 @@ What this means:
   own read-only script; `md-optimize`'s hook auto-approves *only* its safe
   subcommands (verified by `shlex` parsing, not a substring match).
 - **Destructive actions still prompt.** `status-board`'s `plans/` bootstrap
-  (`mkdir`/`touch`/`cp`) and its pre-0.5 `plans/README.md` migration are not
-  auto-approved; `my-commits` never writes; and
+  (`mkdir`/`touch`/`cp`) and its `plans/README.md` edits (the pre-0.5
+  migration, reordering the Next list) are not auto-approved by its hook;
+  `my-commits` never writes; and
   `md-optimize`'s file-overwriting `restore` and snapshot-deleting `prune` always
   ask.
 
@@ -179,8 +206,8 @@ all are stdlib-only. What each touches:
 - Standard library only: `argparse`, `os`, `re`, `sys`. No third-party packages.
 - Read-only: reads `plans/`, prints a table; never writes, deletes, shells out,
   `eval`/`exec`s, or networks. (The separate `plans/` bootstrap that creates files
-  is plain `mkdir`/`cp`, and the migration edits `plans/README.md` with the
-  agent's own tools; neither is auto-approved — both prompt.)
+  is plain `mkdir`/`cp`, and the migration and reordering edit `plans/README.md`
+  with the agent's own tools; the plugin's hook auto-approves none of them.)
 
 **`my-commits` — `my_commits.py`**
 - Standard library only: `argparse`, `subprocess`, `sys`, `datetime`.
@@ -249,25 +276,25 @@ system Seatbelt sandbox. It protects against all tool commands, not just these
 plugins — the right layer for the "scripts from unknown sources" concern.
 
 **Pin what you install.** The repo is public and tagged, so for an immutable
-install you can pin the marketplace to a release tag (e.g. `v1.0.1`) instead of
+install you can pin the marketplace to a release tag (e.g. `v1.1.0`) instead of
 tracking the moving `main`. Easiest — append the tag when adding it:
 
 ```text
-/plugin marketplace add Par-B/par-skills@v1.0.1
+/plugin marketplace add Par-B/par-skills@v1.1.0
 ```
 
-(GitHub shorthand uses `@v1.0.1`; a full git URL uses `#v1.0.1`.) Or declare it
+(GitHub shorthand uses `@v1.1.0`; a full git URL uses `#v1.1.0`.) Or declare it
 persistently in your `settings.json`:
 
 ```json
 "extraKnownMarketplaces": {
   "par-plugins": {
-    "source": { "source": "github", "repo": "Par-B/par-skills", "ref": "v1.0.1" }
+    "source": { "source": "github", "repo": "Par-B/par-skills", "ref": "v1.1.0" }
   }
 }
 ```
 
-Installs and `/plugin marketplace update` then stay on `v1.0.1` until you change
+Installs and `/plugin marketplace update` then stay on `v1.1.0` until you change
 the ref.
 
 ## Recommended permissions (optional · unrelated to the skills)
