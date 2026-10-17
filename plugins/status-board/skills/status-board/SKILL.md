@@ -97,9 +97,10 @@ absent, everything behaves exactly as a single-file board.
   README notes win when a plan appears in both. If still no note, use the plan
   file's first meaningful heading (skip generic ones like "Problem", "What",
   "Summary"; strip a leading "Future:"). Truncate to ~150 chars.
-- **Next, in order** (`full` and `next` scopes): an optional list under a
+- **Not started: next, in order** (`full` and `next` scopes): an optional list under a
   README heading holding the words "next" and "order" (any level, emoji or case;
-  canonically `## ⏭ next — in order`), running to the next heading. Each
+  canonically `## ⚪ not started — next, in order`, `## ⏭ next — in order` on
+  boards made before 0.6.1), running to the next heading. Each
   unindented list item (`-`, `*`, `+`, `1.` or `1)`) names one plan by the first
   backticked text or `.md` filename/link in it, whichever comes first — any
   backticked text counts, even one that isn't a plan; a path reduces to its
@@ -131,15 +132,15 @@ absent, everything behaves exactly as a single-file board.
 - Output is ONE Markdown table. Each in-scope state is a bold section-header row
   with an empty second cell; plan rows follow, plain (name = filename without
   `.md`; escape `|`). Empty in-scope section → one `*(none)*` row. Order: In
-  flight → Next, in order → Designed-not-started → Future ideas → Last 2 done →
-  Last 2 won't-do → Drift. Example:
+  flight → Not started: next, in order → Designed-not-started → Future ideas →
+  Last 2 done → Last 2 won't-do → Drift. Example:
 
   ```
   | Plan | Description |
   |---|---|
   | **🔵 In flight** | |
   | 2026-05-01-some-plan-design | one-line description |
-  | **⏭ Next, in order** | |
+  | **⚪ Not started: next, in order** | |
   | 1. 2026-05-02-other-plan | one-line description |
   | **⚪ Designed, not started** | |
   | *(none)* | |
@@ -171,19 +172,19 @@ template file's contents. Then render the (empty) board.
 
 ## Migrate (pre-0.5 board)
 
-Boards made before 0.5 have no `## ⏭ next — in order` section, and some wrote
+Boards made before 0.5 have no "next … order" heading, and some wrote
 their order as a bold "next … order" line followed by a list. The board's
 **⚠️ Drift** shows `plans/README.md` migration rows for both (see Rules &
 format). After relaying a board that has them, offer once per render; after a
 decline, don't offer again in this conversation:
 
-> "This board predates the "Next, in order" section. Add it to
+> "This board predates the "Not started: next, in order" section. Add it to
 > `plans/README.md`, moving the old list from line N?" (several lists → "lines
 > N, M"; drop the "moving" clause when there is no old-style list)
 
 On explicit approval, edit `plans/README.md` with your own tools:
 
-1. Insert the template's section (the `## ⏭ next — in order` heading, its
+1. Insert the template's section (the `## ⚪ not started — next, in order` heading, its
    comment and `*(none)*`, from `references/readme-template.md`) directly
    before the backlog heading; with no backlog heading, after the active
    section; with neither, at the end. Keep a blank line on each side.
@@ -214,7 +215,7 @@ a path entry shows as undocumented there).
 
 When the user asks to change what comes next ("put the search plan next", "move
 export above search", "take dark mode off the list"), edit **only** the numbered
-list under the `next — in order` heading in `plans/README.md`. The request is the
+list under the "next … order" heading in `plans/README.md`. The request is the
 approval; don't ask again.
 
 1. No such heading yet → do **Migrate (pre-0.5 board)** first (its own approval).

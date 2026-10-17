@@ -55,16 +55,18 @@ default to UTF-8, so this only affects Windows.
 The order of the next few plans lives in `plans/README.md`, under its own heading:
 
 ```markdown
-## ⏭ next — in order
+## ⚪ not started — next, in order
 
 1. `2026-10-16-meal-planner-plan`: the export needs a plan to export from.
 2. `2026-10-16-shopping-list-export-plan`: turns a week's plan into a list.
 ```
 
 One numbered item per plan, named by its backticked filename (without `.md`),
-then a short why. The board shows those still in `backlog/` as **⏭ Next, in
-order**, right under "In flight", numbered by position; they leave "Designed, not
-started", which stays unordered. A plan you start drops out of the list on its
+then a short why. The board shows those still in `backlog/` as **⚪ Not started:
+next, in order**, right under "In flight", numbered by position; they leave
+"Designed, not started", which stays unordered. Any heading with the words "next"
+and "order" works, so boards made before 0.6.1 (`## ⏭ next — in order`) need no
+change. A plan you start drops out of the list on its
 own. Edit the list by hand or, from 0.6, just ask ("put the search plan next",
 "move export above search") and the skill edits it for you. No CLAUDE.md change
 is needed.
@@ -276,25 +278,25 @@ system Seatbelt sandbox. It protects against all tool commands, not just these
 plugins — the right layer for the "scripts from unknown sources" concern.
 
 **Pin what you install.** The repo is public and tagged, so for an immutable
-install you can pin the marketplace to a release tag (e.g. `v1.1.0`) instead of
+install you can pin the marketplace to a release tag (e.g. `v1.1.1`) instead of
 tracking the moving `main`. Easiest — append the tag when adding it:
 
 ```text
-/plugin marketplace add Par-B/par-skills@v1.1.0
+/plugin marketplace add Par-B/par-skills@v1.1.1
 ```
 
-(GitHub shorthand uses `@v1.1.0`; a full git URL uses `#v1.1.0`.) Or declare it
+(GitHub shorthand uses `@v1.1.1`; a full git URL uses `#v1.1.1`.) Or declare it
 persistently in your `settings.json`:
 
 ```json
 "extraKnownMarketplaces": {
   "par-plugins": {
-    "source": { "source": "github", "repo": "Par-B/par-skills", "ref": "v1.1.0" }
+    "source": { "source": "github", "repo": "Par-B/par-skills", "ref": "v1.1.1" }
   }
 }
 ```
 
-Installs and `/plugin marketplace update` then stay on `v1.1.0` until you change
+Installs and `/plugin marketplace update` then stay on `v1.1.1` until you change
 the ref.
 
 ## Recommended permissions (optional · unrelated to the skills)
