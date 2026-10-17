@@ -185,15 +185,17 @@ On explicit approval, edit `plans/README.md` with your own tools:
 1. Insert the template's section (the `## ⏭ next — in order` heading, its
    comment and `*(none)*`, from `references/readme-template.md`) directly
    before the backlog heading; with no backlog heading, after the active
-   section; with neither, at the end.
+   section; with neither, at the end. Keep a blank line on each side.
 2. For each old-style list: move its items under the new heading as a numbered
    list, one plan per item, each starting with the backticked slug, then its
-   why-text; remove the `*(none)*` line.
+   why-text after the list's own separator (e.g. `: `); renumber from 1; remove
+   the `*(none)*` line.
    - Split "A, then B" into two items: A keeps the shared why; B gets "after A"
-     plus the shared why.
+     (A's backticked slug) plus the shared why.
    - Items whose plan isn't in `backlog/` move as-is (the board skips them).
    - Context the bold line carried (who decided, when, a condition) becomes one
-     plain sentence after the template comment, before the list.
+     plain sentence after the template comment, before the list (backticked
+     slugs there are fine — only list items are entries).
    - A prose line that only refers to the old list (e.g. "The rest of the
      backlog waits behind these.") moves under the list.
    - Delete the bold line, its continuation lines and the old list.
