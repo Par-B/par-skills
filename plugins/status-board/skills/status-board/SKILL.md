@@ -1,6 +1,6 @@
 ---
 name: status-board
-description: Use when the user asks to see project status, the status board, what's in progress vs. done, or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do.
+description: Use when the user asks to see project status, the status board, what's in progress vs. done, what's next or the priorities (next in order), or to view a lifecycle state — active, not yet started, future ideas, recently finished, or won't-do.
 ---
 
 # Status Board
@@ -199,12 +199,15 @@ On explicit approval, edit `plans/README.md` with your own tools:
    - A prose line that only refers to the old list (e.g. "The rest of the
      backlog waits behind these.") moves under the list.
    - Delete the bold line, its continuation lines and the old list.
+   - If the list after the bold line is plainly not an order list (e.g. the
+     backlog index itself), stop and tell the user instead of moving it.
 3. Re-run the script: the migration rows must be gone.
 
 Change nothing else. After migration the heading is the only format: the script
 never renders old-style lists, it only flags them. Migrated boards still render
 under an older plugin (0.4.x): it lists those plans under "Designed, not
-started" and adds no drift.
+started" and adds no drift (for bare backticked slugs, as migration writes them;
+a path entry shows as undocumented there).
 
 ## Out of scope
 

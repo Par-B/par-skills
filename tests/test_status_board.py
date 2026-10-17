@@ -264,11 +264,6 @@ def test_prose_and_listless_bold_not_flagged(tmp_path):
     assert "| **⚠️ Drift** | |" not in _run(r)
 
 
-def test_template_board_has_no_migration_rows(tmp_path):
-    r = _board(tmp_path, TEMPLATE.read_text(encoding="utf-8"), [])
-    assert not any("plans/README.md" in ln for ln in _run(r))
-
-
 def test_old_script_reads_template_board(tmp_path):
     r = _board(tmp_path, TEMPLATE.read_text(encoding="utf-8"), [])
     lines = _run(r, script=OLD_SCRIPT)

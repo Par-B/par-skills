@@ -221,7 +221,7 @@ def parse_next_order(path):
     try:
         # Read-only: parse the README as text. Contents are pattern-matched only.
         with open(path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().splitlines()
+            lines = fh.read().split("\n")   # line numbers as editors/grep -n count
     except OSError:
         return None, []
     order, legacy = None, []
