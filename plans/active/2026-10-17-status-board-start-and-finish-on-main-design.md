@@ -1,7 +1,8 @@
 # Status board: start and finish a plan on main
 
 Date: 2026-10-17
-Status: backlog — agreed in discussion on 2026-10-17; nothing built.
+Status: active — agreed in discussion on 2026-10-17; implementation plan:
+`2026-10-17-status-board-start-and-finish-on-main-plan`.
 
 ## Why
 
@@ -38,11 +39,12 @@ plan-running skill use them.
    - `git mv plans/backlog/<plan>.md plans/active/` (a plan already in `active/` on `main`
      skips this step and the commit);
    - move its note from the backlog section of `plans/README.md` to the active section;
-   - take it out of the `## ⏭ next — in order` list, if there is one (see
+   - take it out of the `## ⚪ not started — next, in order` list, if there is one (see
      `2026-10-17-status-board-next-order-design`);
    - commit as a plans-only change ("Plans: start <plan>") and push.
 3. The branch:
-   - **not there yet:** create the branch and its worktree from that commit;
+   - **not there yet:** create the branch from that commit (the worktree is left to the
+     worktree tool — see Decided below);
    - **already there** (work begun before the plan was started): merge `main` into it,
      never rebase (another computer may have pushed to the branch).
 4. Report the commit, the branch and the worktree's path.
@@ -100,12 +102,17 @@ Outside the plugin, once it is installed:
 7. Repos with a narrower rule of their own on plans-only commits (one says they may go
    straight to `main`) keep it; the global rule is the same rule, made general.
 
-## Open
+## Decided (the owner, 2026-10-17, when the plan was written)
 
-- Whether `start` makes the worktree itself or leaves that to the worktree skill it is used
-  with (`using-git-worktrees`): one place for the folder's naming and location.
-- The branch's name: from the plan's slug without the date and `-plan`, unless given.
+- **Worktree: branch only.** `start` creates the branch from the start commit, or merges into
+  an existing one (in its own checkout, or a temporary one), and makes no worktree folder;
+  `using-git-worktrees` keeps the folder's naming and location.
+- **Pairs: the whole pair.** `start <name>`/`finish <name>` act on every file sharing
+  `<date>-<slug>` (`.md`, `-design.md`, `-plan.md`), with their `*.tasks.json` trackers.
+- **Branch name:** the slug without the date and the `-design`/`-plan` suffix, unless given.
+- This plan itself was started by hand the same way (moved to `active/` on `main`, pushed,
+  branch made from that commit), since `start` is what it builds.
 
 ## Result
 
-Nothing built.
+In progress on branch `status-board-start-and-finish-on-main`.

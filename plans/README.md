@@ -28,7 +28,7 @@ that carries a one-line note per plan.
 
 ## 🔵 active — in flight
 
-*(none)*
+- `2026-10-17-status-board-start-and-finish-on-main-{design,plan}` — `/status-board:start` moves a plan to `active/` on `main` (pushed) and makes or syncs its branch from there; `/status-board:finish` checks and puts right the plan on `main` after a merge; the board flags a start or finish missed on `main`.
 
 ## ⚪ not started — next, in order
 
@@ -40,7 +40,7 @@ The board shows the ones still in backlog/, renumbered from 1. -->
 
 ## ⚪ backlog — not started
 
-- `2026-10-17-status-board-start-and-finish-on-main-design` — `/status-board:start` moves a plan to `active/` on `main` (pushed) and makes or syncs its branch from there; `/status-board:finish` checks and puts right the plan on `main` after a merge; the board flags a start or finish missed on `main`.
+*(none)*
 
 ## 💡 future-ideas — raw, un-triaged
 
