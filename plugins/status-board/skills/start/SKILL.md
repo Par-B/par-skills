@@ -9,64 +9,96 @@ Starting a plan is a plans-only change on `main`: its files move from
 `backlog/` to `active/`, its README note moves to the active section and off
 the "next, in order" list, and that commit is pushed — so `main`, every branch
 and every computer show the plan in flight from the moment work begins. Then
-the plan's branch is made from that commit or, if the branch exists, `main` is
-merged into it (never a rebase). Making the worktree is left to your worktree
-tool.
+the plan's branch is made from that commit, or brought up to level if it
+exists (never a rebase). The check reads only and says what to do; you run
+each step. It goes in phases — main, then the branch, then the branch's own
+copy of the plan — one check each.
 
 ## 1. Name the plan
 
 Match the user's words to a plan file (slug or title; `/status-board:status-board`
 lists them). Ambiguous → ask. Pass its filename or slug: the pair
 (`<date>-<slug>-design.md` and `-plan.md`) moves together, with any
-`*.tasks.json` tracker.
+`*.tasks.json` tracker. The branch is the slug without its date and
+`-design`/`-plan` (`2026-10-17-search-design` → `search`); add
+`--branch <name>` when the user named it, or when the work already runs on a
+branch with another name.
 
-## 2. Run the script
+## 2. Fetch, then check
 
-From inside the project — the main checkout or any worktree — run it as one
-plain command, writing the absolute base directory you were told at load time
-literally for `<skill-dir>`:
+1. `git fetch origin` — its own Bash call, timeout 120 s. It fails → report
+   git's message and stop. The check never fetches: it compares with
+   `origin/main` as last fetched.
+2. From inside the project (the main checkout or any worktree), run the check
+   as one plain command, writing the absolute base directory you were told at
+   load time literally for `<skill-dir>` — no variables, no `cd … &&`, no
+   pipes (the plugin's hook auto-approves exactly this shape):
 
-```bash
-python3 "<skill-dir>/../status-board/scripts/plan_flow.py" start <plan>
-```
+   ```bash
+   python3 "<skill-dir>/../status-board/scripts/plan_flow.py" check start <plan>
+   ```
 
-Add `--branch <name>` when the user named the branch, or when the work already
-runs on a branch with another name. By default the branch is the plan's slug
-without its date and `-design`/`-plan` (`2026-10-17-search-design` → `search`).
-`command not found` → retry once with `python`. The plugin does not auto-approve
-this script: it commits and pushes.
+   `command not found` → retry once with `python`. `--json` prints the same
+   as one object, if that is easier to follow; the text form is enough.
 
-## 3. Act on what it prints
+## 3. Act on its first line
 
-- `main:`, `branch:` and `note:` lines → relay them. When the main checkout has
-  uncommitted changes, the script works in a temporary worktree and a `note:`
-  says the main checkout was left as it was: the user pulls when ready.
-- `branch: … no worktree yet` → make the worktree now with your worktree tool,
-  checking out the **existing** branch (`git worktree add <path> <branch>`, not
-  `-b`), and go on with the plan there.
-- `NOT_FOUND: …` (exit 2) → no such plan here or on `main`; say so and show the
-  board.
-- `STOPPED: …` (exit 5) → relay the message. It says why and what was already
-  done; a `main: … pushed` line in it means `main` already changed — say so.
-  Don't work around it — no reset, stash, rebase or force push; ask the user.
-  Expected reasons:
-  - local `main` has commits the remote lacks, or the branch has diverged;
-  - merging `main` into the branch stopped (it was undone), or a merge is
-    already in progress in the branch's checkout;
-  - the plan's files or `plans/README.md` have uncommitted changes in the
-    checkout the plan would be copied from — commit them on a branch, or push
-    them to `main`;
-  - a copy of a plan file would be deleted while it differs from the kept one
-    or has uncommitted changes — nothing was deleted;
-  - `--branch` is not a valid branch name, or is `main` itself;
-  - `plans/README.md` on `main` is missing or has no active section.
+- `PLAN (n steps)` → **Carry out the plan** below.
+- `QUESTION` → ask the user with AskUserQuestion: the question's text, each
+  option's label with what it means. Check again with `--sync <answer>`, and
+  keep that flag on every later check of this start.
+- `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
+  work around it: never reset, stash, rebase, force-push, drop a commit or
+  delete a copy that differs. An option that names such a command is for the
+  user to choose — ask first.
+  Exit 3 → no such plan here or on `main`; say so and show the board.
+- `NOTHING TO DO` → relay the facts that matter. A fact `make the worktree of
+  the existing branch <name> with your worktree tool` → do it now, checking
+  out the **existing** branch (`git worktree add <path> <name>`, not `-b`),
+  and go on with the plan there. A fact that the branch is not pushed is for
+  the user; don't push it.
+
+`[status-board] still waiting on …` lines on stderr are progress, not output.
+A command the check had to stop comes back as ``BLOCKED: `<command>` did
+not answer`` — say which command and the likely causes (another git
+holding the repo's lock, a filesystem monitor, a very large untracked tree); prefixing
+`STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit (default 60).
+
+## Carry out the plan
+
+Facts come first: read them, they say what the check found. Then the steps,
+each `in <dir>`, in order:
+
+- **A command** (`limit N s`, `expect: …`) → run it as printed, alone: one
+  Bash call, never chained (`&&`, `;`, pipes), Bash timeout = its limit. Run
+  it in its directory: `git -C <dir> <the rest>` for git, an absolute path
+  for `mkdir -p`. Compare the result with `expect`.
+- **An edit** (`edit plans/README.md lines a–b`, or `insert before line a`:
+  `-` lines out, `+` lines in, the unmarked lines around them as context) →
+  Read `<dir>/plans/README.md`, then make exactly that change with the Edit
+  tool (the context makes the old text unique). Never touch other lines.
+  Then do what its `then:` says: re-read the section and the plan's note,
+  and reword the note if it no longer fits the plan's new state (e.g. it
+  still says "not started"). Do this before the `git add` step that follows.
+- **The recheck** (last) → run it from its directory, as given — same flags,
+  `--sync` included. `cd` there first if the shell moved.
+
+A step fails (an error, or a result other than `expect`) → stop there. Read
+git's message against the facts, tell the user what happened, then check
+again: the check sees the half-done state and plans from it. Where `expect`
+says what to do on failure (a rejected push, a merge conflict), do that.
+
+Repeat until `NOTHING TO DO`. A start takes up to 3–4 rounds (main, the
+branch, the branch's copy); still `PLAN` after 4 → stop and report the last
+facts.
 
 ## Without Python
 
-Do what the script does, with git: `git fetch`; in a checkout of `main` level
-with `origin/main` (a temporary `git worktree add --detach <dir> origin/main`
-when the main checkout is busy), `git mv` the plan's files from `plans/backlog/`
-to `plans/active/`, move its note in `plans/README.md` to the active section and
-off the next list, commit just those paths as `Plans: start <date>-<slug>` and
-`git push origin HEAD:main`; then `git branch <name> <commit>`, or merge that
-commit into the existing branch in its checkout.
+The check needs Python 3 and git 2.44 or later. Without them, do it by hand:
+`git fetch origin`; in a checkout of `main` level with `origin/main` (a
+temporary `git worktree add --detach <dir> origin/main` when the main checkout
+is busy), `git mv` the plan's files from `plans/backlog/` to `plans/active/`,
+move its note in `plans/README.md` to the active section and off the next
+list, commit just those paths as `Plans: start <date>-<slug>` and
+`git push origin HEAD:refs/heads/main`; then `git branch <name> origin/main`,
+or ask before merging `origin/main` into an existing branch.

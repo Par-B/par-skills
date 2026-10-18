@@ -6,53 +6,89 @@ description: Use after a plan's branch has been merged into main — a pull requ
 # Finish a plan on main
 
 The branch still moves its plan to `done/` itself before merging, so `main`
-shows it done exactly when the work lands. This is the check after the merge: a
-pull request merged on GitHub leaves the local `main` behind, and a branch that
-forgot the move leaves the plan in flight for good. The script fast-forwards
-the local `main`, checks the plan there — files in `done/` (or `wont-do/`), no
-`*.tasks.json` tracker, its note in that section — and puts right what is
-missing as one plans-only commit, pushed. With nothing missing it makes no
-commit.
+shows it done exactly when the work lands. This is the check after the merge:
+a pull request merged on GitHub leaves the local `main` behind, and a branch
+that forgot the move leaves the plan in flight for good. The check reads only:
+files in `done/` (or `wont-do/`), no `*.tasks.json` tracker, its note in that
+section, off the next list — and says what to do for what is missing; you run
+each step. With nothing missing there is nothing to commit.
 
 ## 1. Name the plan
 
 Match the user's words to a plan file (slug or title; `/status-board:status-board`
 lists them). Ambiguous → ask. Pass its filename or slug: the pair
-(`<date>-<slug>-design.md` and `-plan.md`) is checked together.
+(`<date>-<slug>-design.md` and `-plan.md`) is checked together. Add
+`--wont-do` when the plan was dropped rather than shipped.
 
-## 2. Run the script
+## 2. Fetch, then check
 
-From inside the project — the main checkout or any worktree — run it as one
-plain command, writing the absolute base directory you were told at load time
-literally for `<skill-dir>`:
+1. `git fetch origin` — its own Bash call, timeout 120 s. It fails → report
+   git's message and stop. The check never fetches: it compares with
+   `origin/main` as last fetched.
+2. From inside the project (the main checkout or any worktree), run the check
+   as one plain command, writing the absolute base directory you were told at
+   load time literally for `<skill-dir>` — no variables, no `cd … &&`, no
+   pipes (the plugin's hook auto-approves exactly this shape):
 
-```bash
-python3 "<skill-dir>/../status-board/scripts/plan_flow.py" finish <plan>
-```
+   ```bash
+   python3 "<skill-dir>/../status-board/scripts/plan_flow.py" check finish <plan>
+   ```
 
-Add `--wont-do` when the plan was dropped rather than shipped. `command not
-found` → retry once with `python`. The plugin does not auto-approve this
-script: it commits and pushes.
+   `command not found` → retry once with `python`. `--json` prints the same
+   as one object, if that is easier to follow; the text form is enough.
 
-## 3. Act on what it prints
+## 3. Act on its first line
 
-- `main:` and `note:` lines → relay them. When the main checkout has
-  uncommitted changes to the plan's files, its tracker or `plans/README.md`,
-  the script works in a temporary worktree and a `note:` says the main
-  checkout was left as it was: the user pulls when ready.
-- `NOT_FOUND: …` (exit 2) → the plan is not on `main` at all; its branch is
-  probably not merged yet. Say so.
-- `STOPPED: …` (exit 5) → relay the message. It says why (local `main` has
-  commits the remote lacks; a copy of a plan file differs from the kept one, so
-  nothing was deleted; `plans/README.md` has no done or won't-do section…) and
-  what was already done. Don't work around it — no reset, stash, rebase or
-  force push; ask the user.
+- `PLAN (n steps)` → **Carry out the plan** below. Facts showing the plan
+  still in `backlog/` on `origin/main` (never started) → confirm with the
+  user that it is finished before running the steps.
+- `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
+  work around it: never reset, stash, rebase, force-push, drop a commit or
+  delete a copy that differs. An option that names such a command is for the
+  user to choose — ask first.
+  Exit 3 → the plan is not on `main`: has its branch been merged? Fetch
+  first. Say so.
+- `NOTHING TO DO` → say the plan is done (or won't do) on `main`.
+
+`[status-board] still waiting on …` lines on stderr are progress, not output.
+A command the check had to stop comes back as ``BLOCKED: `<command>` did
+not answer`` — say which command and the likely causes (another git
+holding the repo's lock, a filesystem monitor, a very large untracked tree); prefixing
+`STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit (default 60).
+
+## Carry out the plan
+
+Facts come first: read them, they say what the check found. Then the steps,
+each `in <dir>`, in order:
+
+- **A command** (`limit N s`, `expect: …`) → run it as printed, alone: one
+  Bash call, never chained (`&&`, `;`, pipes), Bash timeout = its limit. Run
+  it in its directory: `git -C <dir> <the rest>` for git, an absolute path
+  for `mkdir -p`. Compare the result with `expect`.
+- **An edit** (`edit plans/README.md lines a–b`, or `insert before line a`:
+  `-` lines out, `+` lines in, the unmarked lines around them as context) →
+  Read `<dir>/plans/README.md`, then make exactly that change with the Edit
+  tool (the context makes the old text unique). Never touch other lines.
+  Then do what its `then:` says: re-read the section and the plan's note,
+  and reword the note if it no longer fits (e.g. it still says "in
+  progress"). Do this before the `git add` step that follows.
+- **The recheck** (last) → run it from its directory, as given — same flags.
+  `cd` there first if the shell moved.
+
+A step fails (an error, or a result other than `expect`) → stop there. Read
+git's message against the facts, tell the user what happened, then check
+again: the check sees the half-done state and plans from it. Where `expect`
+says what to do on failure (a rejected push), do that.
+
+Repeat until `NOTHING TO DO`; still `PLAN` after 4 rounds → stop and report
+the last facts.
 
 ## Without Python
 
-Do what the script does, with git: `git fetch`; fast-forward the local `main`;
-in a checkout of `main` level with `origin/main`, `git mv` any of the plan's
-files not yet in `plans/done/` there, `git rm` its `*.tasks.json`, move its note
-in `plans/README.md` to the top of the done section, commit just those paths as
-`Plans: <date>-<slug> done` and `git push origin HEAD:main`. Nothing to change:
-no commit.
+The check needs Python 3 and git 2.44 or later. Without them, do it by hand:
+`git fetch origin`; in a checkout of `main` level with `origin/main`, `git mv`
+any of the plan's files not yet in `plans/done/` there, `git rm` its
+`*.tasks.json`, move its note in `plans/README.md` to the top of the done
+section and off the next list, commit just those paths as
+`Plans: <date>-<slug> done` and `git push origin HEAD:refs/heads/main`.
+Nothing to change: no commit.
