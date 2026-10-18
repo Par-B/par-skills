@@ -27,9 +27,11 @@ Security properties (for auditors — each is verifiable against the code below)
     stdin and no prompts (GIT_TERMINAL_PROMPT=0); GIT_OPTIONAL_LOCKS=0; an
     inherited GIT_DIR/GIT_WORK_TREE dropped. Its watchdog prints a "still
     waiting" line to stderr every few seconds (STATUS_BOARD_WARN_SECS,
-    default 5) and kills the command and its process group at a hard limit
-    (STATUS_BOARD_KILL_SECS, default 60). Only positive numbers are taken
-    from those variables; they change timing only, never what runs.
+    default 5) and kills the command at a hard limit (STATUS_BOARD_KILL_SECS,
+    default 60) or on any interrupt — on POSIX with its whole process group,
+    on Windows the command itself only (TerminateProcess). Only positive
+    finite numbers are taken from those variables; they change timing only,
+    never what runs.
   * Read-only git: the only command run is git (see git_out), and only
     commands that read — symbolic-ref (one argument), rev-parse --verify,
     ls-tree and for-each-ref — to compare plans/ with the remote's main
@@ -121,19 +123,23 @@ class Watchdog(Exception):
 
 def watch_secs(warn=None, kill=None):
     """(warn, kill) seconds: the arguments, else the environment, else 5 and 60."""
+    def valid(value):
+        return 0 < value < float("inf")             # also refuses nan
+
     def pick(given, name, default):
-        if given:
+        if given is not None and valid(given):
             return given
         try:
             value = float(os.environ.get(name, ""))
         except ValueError:
             return default
-        return value if 0 < value < float("inf") else default   # also refuses nan
+        return value if valid(value) else default
     return pick(warn, WARN_ENV, WARN_SECS), pick(kill, KILL_ENV, KILL_SECS)
 
 
 def _stop(p):
-    """Kill a watched command and whatever it started (its process group)."""
+    """Kill a watched command and, on POSIX, whatever it started (its process
+    group); on Windows only the command itself (TerminateProcess)."""
     try:
         if os.name == "posix":
             os.killpg(p.pid, signal.SIGKILL)
@@ -144,7 +150,16 @@ def _stop(p):
     try:
         p.communicate(timeout=2)
     except subprocess.TimeoutExpired:
-        pass
+        # A grandchild that left the group still holds the pipes.
+        for pipe in (p.stdout, p.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass
+        try:
+            p.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
 
 
 def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
@@ -152,9 +167,10 @@ def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
 
     After `warn` seconds, and every `warn` seconds after, a line on `log`
     (stderr) names the command still running; at `kill` seconds it is stopped
-    and Watchdog is raised. With `trace`, every command is logged with its exit
-    code and time. Returns a CompletedProcess; OSError (no such program)
-    propagates."""
+    and Watchdog is raised. Any other exception while waiting (a Ctrl-C, which
+    the command's own session never sees) stops it too. With `trace`, every
+    command is logged with its exit code and time. Returns a CompletedProcess;
+    OSError (no such program) propagates."""
     warn, kill = watch_secs(warn, kill)
     log = log or sys.stderr
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
@@ -165,18 +181,24 @@ def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
     p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          encoding="utf-8", errors="replace", **group)
-    while True:
-        left = kill - (time.monotonic() - start)
-        try:
-            out, err = p.communicate(timeout=max(0.01, min(warn, left)))
-            break
-        except subprocess.TimeoutExpired:
-            secs = time.monotonic() - start
-            if secs >= kill:
-                _stop(p)
-                raise Watchdog(argv, cwd, secs) from None
-            print(f"[status-board] still waiting on `{shlex.join(argv)}` in {cwd} "
-                  f"({secs:.0f}s)", file=log, flush=True)
+    try:
+        while True:
+            left = kill - (time.monotonic() - start)
+            try:
+                out, err = p.communicate(timeout=max(0.01, min(warn, left)))
+                break
+            except subprocess.TimeoutExpired:
+                secs = time.monotonic() - start
+                if secs >= kill:
+                    _stop(p)
+                    raise Watchdog(argv, cwd, secs) from None
+                print(f"[status-board] still waiting on `{shlex.join(argv)}` in {cwd} "
+                      f"({secs:.0f}s)", file=log, flush=True)
+    except Watchdog:
+        raise
+    except BaseException:
+        _stop(p)
+        raise
     if trace:
         print(f"[status-board] `{shlex.join(argv)}` in {cwd}: exit {p.returncode}, "
               f"{time.monotonic() - start:.2f}s", file=log, flush=True)
@@ -444,7 +466,7 @@ def main_drift(root, plans):
     try:
         return _main_drift(root, plans)
     except Watchdog as e:
-        return [("origin/main", f"main check skipped: {e}")]
+        return [("main check", f"main check skipped: {e}")]
 
 
 def _main_drift(root, plans):

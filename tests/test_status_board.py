@@ -482,9 +482,13 @@ def test_main_check_never_fetches_a_partial_clones_missing_trees(tmp_path):
 
 # --- the watchdog on every command --------------------------------------------
 
+import gc  # noqa: E402
 import io  # noqa: E402
 import shutil  # noqa: E402
+import signal  # noqa: E402
+import threading  # noqa: E402
 import time  # noqa: E402
+import warnings  # noqa: E402
 
 sys.path.insert(0, str(pathlib.Path(SCRIPT).parent))
 import status_board as board  # noqa: E402
@@ -493,18 +497,23 @@ POSIX = pytest.mark.skipif(os.name != "posix", reason="the fake git is a POSIX s
 REAL_GIT = shutil.which("git")
 
 
-def _fake_git(tmp_path, hang_on):
+def _fake_git(tmp_path, hang_on, escape=False):
     """A dir holding a `git` that runs the real git, except that when its
     arguments include `hang_on` it starts a `sleep` (its pid in tmp_path/sleeper)
-    and waits on it — so only a kill of the whole process group stops both."""
+    and waits on it — so only a kill of the whole process group stops both.
+    With `escape`, the sleeper leaves the group (setsid) but keeps the pipes."""
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
     fake = bin_dir / "git"
+    pid_file = tmp_path / "sleeper"
+    sleeper = (f"'{sys.executable}' -c 'import os, time; os.setsid(); "
+               f'open("{pid_file}", "w").write(str(os.getpid())); time.sleep(30)\' &'
+               if escape else f"sleep 30 & echo $! > '{pid_file}';")
     fake.write_text(
         "#!/bin/sh\n"
         'for a in "$@"; do\n'
         f'  if [ "$a" = "{hang_on}" ]; then\n'
-        f"    sleep 30 & echo $! > '{tmp_path / 'sleeper'}'; wait; exit 1\n"
+        f"    {sleeper} wait; exit 1\n"
         "  fi\n"
         "done\n"
         f"exec '{REAL_GIT}' \"$@\"\n", encoding="utf-8")
@@ -541,6 +550,40 @@ def test_watchdog_warns_then_stops_the_command_and_its_children(tmp_path, monkey
     assert _gone(int((tmp_path / "sleeper").read_text()))
 
 
+@POSIX
+def test_an_interrupt_stops_the_command_and_its_children(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status')}{os.pathsep}{os.environ['PATH']}")
+    main = threading.get_ident()
+    timer = threading.Timer(0.3, signal.pthread_kill, (main, signal.SIGINT))
+    timer.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            board.run_watched(["git", "status"], str(tmp_path), warn=0.2, kill=10,
+                              log=io.StringIO())
+    finally:
+        timer.cancel()
+    assert _gone(int((tmp_path / "sleeper").read_text()))
+
+
+@POSIX
+def test_a_child_that_leaves_the_group_leaves_no_pipes_or_zombie(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status', escape=True)}"
+                               f"{os.pathsep}{os.environ['PATH']}")
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with pytest.raises(board.Watchdog) as stopped:
+                board.run_watched(["git", "status"], str(tmp_path), warn=0.5, kill=1,
+                                  log=io.StringIO())
+            del stopped                     # its traceback holds the Popen
+            gc.collect()
+        assert [str(w.message) for w in caught if w.category is ResourceWarning] == []
+    finally:
+        pid_file = tmp_path / "sleeper"
+        if pid_file.exists():
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
 def test_watchdog_times_from_arguments_then_environment(monkeypatch):
     monkeypatch.delenv(board.WARN_ENV, raising=False)
     monkeypatch.delenv(board.KILL_ENV, raising=False)
@@ -549,10 +592,13 @@ def test_watchdog_times_from_arguments_then_environment(monkeypatch):
     monkeypatch.setenv(board.KILL_ENV, "7")
     assert board.watch_secs() == (0.5, 7.0)
     assert board.watch_secs(warn=2, kill=3) == (2, 3)
-    for bad in ("", "soon", "0", "-4", "nan-ish"):
+    for bad in (-1, 0, float("nan"), float("inf")):     # an invalid argument: env
+        assert board.watch_secs(warn=bad, kill=bad) == (0.5, 7.0)
+    for bad in ("", "soon", "0", "-4", "nan-ish", "nan", "inf", "-inf"):
         monkeypatch.setenv(board.WARN_ENV, bad)
         monkeypatch.setenv(board.KILL_ENV, bad)
         assert board.watch_secs() == (5.0, 60.0)
+        assert board.watch_secs(warn=-1, kill=float("inf")) == (5.0, 60.0)
 
 
 def test_watched_command_gets_no_stdin_no_prompts_and_no_inherited_repo(tmp_path, monkeypatch):
@@ -599,7 +645,7 @@ def test_main_check_hang_shows_a_skip_row(tmp_path):
     assert p.returncode == 0, p.stderr
     rows = _section(p.stdout.splitlines(), "⚠️ Drift")
     assert len(rows) == 1
-    assert rows[0].startswith("| origin/main | main check skipped: `git --no-lazy-fetch -C ")
+    assert rows[0].startswith("| main check | main check skipped: `git --no-lazy-fetch -C ")
     assert rows[0].endswith(" was stopped |") and " ls-tree " in rows[0]
     assert "[status-board] still waiting on `git --no-lazy-fetch" in p.stderr
     assert _gone(int((tmp_path / "sleeper").read_text()))
