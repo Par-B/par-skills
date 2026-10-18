@@ -3,6 +3,7 @@
 worktrees with git directly). Git runs with no global or system config and no
 inherited GIT_* variables, so the user's own settings (signing, hooks, default
 branch) and the calling repo can't leak in."""
+import json
 import os
 import pathlib
 import subprocess
@@ -125,3 +126,47 @@ def run(script, cwd, *args):
     p = subprocess.run([sys.executable, str(script), *args], cwd=str(cwd),
                        capture_output=True, text=True, encoding="utf-8", env=ENV)
     return p.returncode, p.stdout + p.stderr
+
+
+def check(script, cwd, *args):
+    """(exit code, parsed --json output) of `plan_flow.py check …` run in `cwd`."""
+    rc, out = run(script, cwd, "check", *args, "--json")
+    return rc, json.loads(out[out.index("{"):])
+
+
+def execute(steps):
+    """Carry out a check's steps the way the skill tells Claude to: each run
+    step alone, in its directory, stopping at the first that fails; each edit
+    replaces exactly its old lines. Returns None, or (step, CompletedProcess)
+    for the step that failed."""
+    for step in steps:
+        if step["kind"] == "run":
+            p = subprocess.run(step["argv"], cwd=step["cwd"], capture_output=True,
+                               text=True, encoding="utf-8", env=ENV)
+            if p.returncode:
+                return step, p
+        elif step["kind"] == "edit":
+            path = pathlib.Path(step["cwd"]) / step["path"]
+            raw = path.read_bytes().decode("utf-8")
+            crlf = "\r\n" in raw
+            lines = raw.replace("\r\n", "\n").split("\n")
+            a, b = step["start"] - 1, step["end"]
+            assert lines[a:b] == step["old"], (step, lines[a:b])
+            lines[a:b] = step["new"]
+            text = "\n".join(lines)
+            path.write_bytes((text.replace("\n", "\r\n") if crlf else text).encode("utf-8"))
+    return None
+
+
+def converge(script, cwd, *args, rounds=4):
+    """Check, execute, repeat until the outcome is not "plan"; returns the
+    list of outcomes, the last check's exit code and its output."""
+    seen = []
+    for _ in range(rounds):
+        rc, res = check(script, cwd, *args)
+        seen.append(res["outcome"])
+        if res["outcome"] != "plan":
+            return seen, rc, res
+        failed = execute(res["steps"])
+        assert failed is None, failed
+    raise AssertionError(f"no convergence: {seen}")
