@@ -95,3 +95,67 @@ def test_find_notes():
     text = readme(backlog=(THING, OTHER))
     assert plan_readme.find_notes(text, {OTHER}) == [f"- `{OTHER}` — note of {OTHER}."]
     assert plan_readme.find_notes(text, {"nope"}) == []
+
+
+def test_find_notes_brace_note_with_continuation():
+    note = "- `2026-01-01-thing-{design,plan}` — both,\n  wrapped onto a second line."
+    text = readme(backlog=(OTHER,)).replace(BACKLOG_HEAD, BACKLOG_HEAD + note + "\n")
+    assert plan_readme.find_notes(text, {"2026-01-01-thing-plan"}) == note.split("\n")
+
+
+def test_nested_next_list_and_notes_each_edited_once():
+    def board(active, order, notes):
+        return "\n".join([
+            "# Plans", "",
+            "## 🔵 active — in flight", "", *active, "",
+            "## ⚪ backlog — not started", "",
+            "### next — in order", "", *order, "",
+            "### all", "", *notes, "",
+            "## 🟢 done — shipped", "", "*(none)*", "",
+        ])
+    text = board(["*(none)*"],
+                 [f"1. `{OTHER}`: why.", f"2. `{THING}`: why.", "3. `b`: why."],
+                 [f"- `{THING}` — note of {THING}.", f"- `{OTHER}` — note of {OTHER}."])
+    assert _move(text, {THING}, "active") == board(
+        [f"- `{THING}` — note of {THING}."],
+        [f"1. `{OTHER}`: why.", "2. `b`: why."],
+        [f"- `{OTHER}` — note of {OTHER}."])
+    alone = board(["*(none)*"], [f"1. `{THING}`: why."], [f"- `{THING}` — note of {THING}."])
+    assert _move(alone, {THING}, "active") == board(
+        [f"- `{THING}` — note of {THING}."], ["*(none)*"], ["*(none)*"])
+
+
+def test_lazy_continuation_moves_whole():
+    note = f"- `{THING}` — a long note that wraps\nonto an unindented line."
+    text = readme(backlog=(OTHER,)).replace(BACKLOG_HEAD, BACKLOG_HEAD + note + "\n")
+    out = _move(text, {THING}, "active")
+    assert section(out, "active").strip() == note
+    assert section(out, "backlog").strip() == f"- `{OTHER}` — note of {OTHER}."
+
+
+def test_heading_kind_is_its_earliest_state_word():
+    for heading, kind, other in [
+            ("won't do — ideas we dropped", "wont-do", "future-ideas"),
+            ("done — shipped, no longer active", "done", "active"),
+            ("future ideas — not in the backlog yet", "future-ideas", "backlog")]:
+        text = f"# Plans\n\n## {heading}\n\n*(none)*\n"
+        assert plan_readme.has_section(text, kind), heading
+        assert not plan_readme.has_section(text, other), heading
+
+
+def test_has_section():
+    text = readme()
+    assert all(plan_readme.has_section(text, k)
+               for k in ("active", "next", "backlog", "done", "wont-do"))
+    assert not plan_readme.has_section(text, "future-ideas")
+
+
+def test_wont_do_puts_note_at_top():
+    text = readme(active=(THING,), wontdo=(OTHER,))
+    assert _move(text, {THING}, "wont-do") == readme(wontdo=(THING, OTHER))
+
+
+def test_fallback_lands_at_top_of_done():
+    out = _move(readme(done=(OTHER,)), {THING}, "done", ["- `t` — fallback."])
+    assert section(out, "done").strip() == (
+        f"- `t` — fallback.\n- `{OTHER}` — note of {OTHER}.")

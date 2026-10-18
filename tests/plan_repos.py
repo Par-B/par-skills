@@ -1,7 +1,8 @@
 """Throwaway git repos and README text for the status-board tests: a bare
-"origin", a main checkout cloned from it holding a plans/ board, and worktrees
-beside them. Git runs with no global or system config, so the user's own
-settings (signing, hooks, default branch) can't leak in."""
+"origin" and a main checkout cloned from it holding a plans/ board (tests add
+worktrees with git directly). Git runs with no global or system config and no
+inherited GIT_* variables, so the user's own settings (signing, hooks, default
+branch) and the calling repo can't leak in."""
 import os
 import pathlib
 import subprocess
@@ -10,7 +11,8 @@ import sys
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 THING = "2026-01-01-thing-design"
 OTHER = "2026-01-02-other-design"
-ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+ENV = dict({k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+           GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
            GIT_AUTHOR_NAME="Me", GIT_AUTHOR_EMAIL="me@example.com",
            GIT_COMMITTER_NAME="Me", GIT_COMMITTER_EMAIL="me@example.com",
            PYTHONUTF8="1")
