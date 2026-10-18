@@ -135,22 +135,32 @@ pushed plans-only commit. Nothing missing, no commit.
 
 A plan may be marked done only when every pull request for it is merged, or
 you say so. Claude looks the plan's PRs up with `gh` (one `gh pr list --head
-<branch>` per branch: the default name plus each `--branch NAME`) and passes
-`--prs-merged` only when every branch has at least one PR and all are merged
-(no PR found for a branch: it leaves the proof to git, or asks you); an open
-PR, or one closed without merging, means it asks you. `--confirm` is your explicit word, never inferred from a
+<branch>` per branch: the slug's branch by default; `--branch NAME`,
+repeatable, replaces it) and passes `--prs-merged` only when every branch has
+at least one PR and all are merged (no PR found for a branch: it leaves the
+proof to git, or asks you); an open PR, or one closed without merging, means
+it asks you. `--confirm` is your explicit word, never inferred from a
 workflow; `--wont-do` needs it. Without either, the check plans the move only
-when every branch is proven merged into `origin/main` locally, and otherwise
-stops, listing each branch and what is missing. Unfinished tasks in the
-plan's tracker show as a fact ("3 of 14 tasks not completed").
+when every branch is proven merged locally — its tip holds work after the
+plan's start and is in `origin/main` — and otherwise stops, listing each
+branch and what is missing ("doesn't contain the plan's start", "has no work
+after the plan's start", …). A gone upstream proves nothing (a PR closed
+unmerged loses its branch too), and a squash or rebase merge leaves no trace,
+so those need `--prs-merged` or `--confirm`. When main already has the plan
+in `done/` or `wont-do/`, no proof is needed for what is left (its tracker or
+note). Unfinished tasks in the plan's tracker show as a fact ("3 of 14 tasks
+not completed").
 
 Rendered on a branch or in a worktree, the board also compares with
 `origin/main` (as last fetched; origin/HEAD's branch, else `origin/main`, else
 `origin/master`) and flags under ⚠️ Drift a plan that is active here but still
-in backlog on main (`… — run /status-board:start`), or still active here and
-on main once the branch looks merged (its upstream gone; `… — run
-/status-board:finish`; on an older branch that moved its plan itself, done
-here and not on main). This
+in backlog on main (`… — run /status-board:start`). Once the branch's
+upstream is gone it adds a hint for the branch's own plan (its slug is the
+branch's name), still active here and on main: `active here and on main; this
+branch's upstream is gone — if its PR was merged, run /status-board:finish`
+(on an older branch that moved its plan itself: `<state> here, still <state>
+on main; …`). A gone upstream is a hint, not proof — a closed PR's branch is
+gone too — so Claude checks the PR before offering the finish. This
 main check needs **git ≥ 2.44** (it runs `git --no-lazy-fetch`, so a partial
 clone never fetches); on older git, without git or without a remote it is
 skipped. `plan_flow.py check` needs git 2.44 too.
@@ -263,8 +273,9 @@ script** via a `PreToolUse` hook, so they don't prompt on every run:
 | `status-board` | `skills/status-board/scripts/status_board.py` (any args) and `scripts/plan_flow.py check …`, via `hooks/approve_read_only.py` | reads your `plans/` dir and runs read-only git; prints the board, or the start/finish check's facts and steps |
 | `my-commits` | `skills/my-commits/scripts/my_commits.py` | runs read-only git, prints a table |
 
-`status-board`'s hook delegates to `hooks/approve_read_only.py`, which parses
-the command and approves exactly one plain call of **this plugin install's own
+`status-board`'s hook delegates to `hooks/approve_read_only.py` (run by
+`python3`, or by `python` where there is no `python3`), which parses the
+command and approves exactly one plain call of **this plugin install's own
 copy** of one of its two read-only scripts: bare, unquoted `python3` or
 `python` (no interpreter by path), an absolute script path that resolves
 (symlinks followed) to the file shipped next to the hook, only the characters

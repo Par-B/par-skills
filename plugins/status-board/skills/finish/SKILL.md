@@ -20,9 +20,10 @@ itself; you run each step. A pull request merged on GitHub leaves the local
 Match the user's words to a plan file (slug or title; `/status-board:status-board`
 lists them). Ambiguous → ask. Pass its filename or slug: the pair
 (`<date>-<slug>-design.md` and `-plan.md`) is checked together. Its branches:
-the default name (the slug without its date and `-design`/`-plan`, always
-included), plus each one the user names or the plan's pull requests use —
-`--branch <name>` for each extra one.
+by default the slug without its date and `-design`/`-plan`. `--branch <name>`
+(repeatable) replaces that default, so when the plan wasn't built on the
+default branch, or on more than one, name each branch the user names or the
+plan's pull requests use.
 
 ## 2. Is it finished?
 
@@ -33,7 +34,10 @@ included), plus each one the user names or the plan's pull requests use —
   pushed) → don't pass it: let the check prove the merge from git, or ask
   the user. Any still open, or closed without merging (that may mean won't
   do, or a dropped feature) → stop and ask the user. No `gh` → the check
-  proves the merge from git.
+  proves the merge from git: a branch tip that holds work after the plan's
+  start and is in `origin/main`. A gone upstream proves nothing (a PR closed
+  unmerged loses its branch too), and a squash or rebase merge leaves no
+  trace — those need `--prs-merged` or the user's `--confirm`.
 - `--confirm` only when the user has said in so many words that the plan is
   finished (with `--wont-do`: dropped) — never inferred from a workflow (a
   merge script, a finishing skill, "the tests pass"). `--wont-do` needs
@@ -65,10 +69,16 @@ included), plus each one the user names or the plan's pull requests use —
   `future-ideas/`: never started) → confirm with the user that it is
   finished before running the steps.
 - `BLOCKED: <plan> isn't proven merged` → relay each branch and what is
-  missing (the `Why:` line), and ask the user: merge it, or say it is
-  finished (then `--confirm`). A squash or rebase merge leaves no trace in
-  git: confirm the PRs with `gh`, then `--prs-merged`. Another branch of the
-  plan → `--branch NAME`.
+  missing (the `Why:` line: it "doesn't contain the plan's start", "has no
+  work after the plan's start", has commits not in `origin/main`, or "its
+  upstream is gone — merged or closed? check the PR with gh"), and ask the
+  user: merge it, or say it is finished (then `--confirm`). A squash or
+  rebase merge leaves no trace in git: confirm the PRs with `gh`, then
+  `--prs-merged`. The plan's work was on other branches → name each with
+  `--branch NAME`.
+- A fact `main already has it in <state>/: no proof of a merge is needed for
+  what is left` → the move was made; the plan only tidies its tracker or
+  note.
 - `BLOCKED: dropping a plan needs the user's explicit word` → ask; only if
   they say to drop it, check again with `--wont-do --confirm`.
 - `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
@@ -116,9 +126,10 @@ each `in <dir>`, in order:
 A step fails (an error, or a result other than `expect`) → stop there. Read
 git's message against the facts, tell the user what happened, then check
 again: the check sees the half-done state and plans from it. Where `expect`
-says what to do on failure (a rejected push), do that. A commit or push that
-times out is most likely a hook (pre-commit, pre-push, a gpg pinentry) —
-tell the user; rerun with a longer timeout only with their OK. A step the
+says what to do on failure (a rejected push), do that. A commit, merge or
+push (limit 120 s; the other steps 10 s) that times out is most likely one of
+the repo's hooks (pre-commit, pre-push, a gpg pinentry) or LFS — tell the
+user; rerun with a longer timeout only with their OK. A step the
 harness refuses (e.g. a worktree-isolated session refusing `git -C` into
 another checkout) → stop and tell the user to run the finish from a session
 in the main checkout.

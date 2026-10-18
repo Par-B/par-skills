@@ -97,8 +97,9 @@ A step fails (an error, or a result other than `expect`) → stop there. Read
 git's message against the facts, tell the user what happened, then check
 again: the check sees the half-done state and plans from it. Where `expect`
 says what to do on failure (a rejected push, a merge conflict), do that. A
-commit or push that times out is most likely a hook (pre-commit, pre-push, a
-gpg pinentry) — tell the user; rerun with a longer timeout only with their
+commit, merge or push (limit 120 s; the other steps 10 s) that times out is
+most likely one of the repo's hooks (pre-commit, pre-push, a gpg pinentry)
+or LFS — tell the user; rerun with a longer timeout only with their
 OK. A step the harness refuses (e.g. a worktree-isolated session refusing
 `git -C` into another checkout) → stop and tell the user to run the start
 from a session in the main checkout.

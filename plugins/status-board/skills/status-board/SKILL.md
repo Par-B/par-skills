@@ -52,7 +52,8 @@ Read its output:
   verbatim, then go to **Migrate (pre-0.5 board)**.
 - A table whose **⚠️ Drift** has rows ending `run /status-board:start` or
   `run /status-board:finish` → relay it verbatim, then offer once to run that
-  skill for those plans.
+  skill for those plans. A finish row is a hint (`if its PR was merged`):
+  before offering, check the PR as finish's step 2 does.
 - A **⚠️ Drift** row `main check | main check skipped: …` → a git command of
   the main check (below) ran past its limit and was stopped; the rest of the
   board is complete. Relay it, and say the likely causes (another git holding
@@ -138,14 +139,15 @@ absent, everything behaves exactly as a single-file board.
   --no-lazy-fetch`, so it needs git 2.44 or later and is skipped on older git,
   without git or a remote, and by the portable fallback. A plan in `active/`
   here that is still in `backlog/` on main → `active here, still in backlog on
-  main — run /status-board:start`; once the branch's upstream is gone (a merged
-  pull request's branch, after `git fetch --prune`), a plan still in
-  `active/` both here and on main → `active here and on main, and this branch
-  looks merged — run /status-board:finish`; on an older branch that moved its
-  plan itself, a plan in `done/`/`wont-do/` here that is still
-  `active`/`backlog` on main → `<state> here and merged, still <state> on main
-  — run /status-board:finish` (e.g. `done here and merged, still active on
-  main — run /status-board:finish`).
+  main — run /status-board:start`. Once the branch's upstream is gone (after
+  `git fetch --prune`; a hint, not proof: a PR closed unmerged loses its
+  branch too), the branch's own plan (its slug is the branch's name) still
+  in `active/` here and on main → `active here and on main; this branch's
+  upstream is gone — if its PR was merged, run /status-board:finish`; and,
+  on an older branch that moved its plan itself, a plan in
+  `done/`/`wont-do/` here that is still `active`/`backlog` on main →
+  `<state> here, still <state> on main; this branch's upstream is gone — if
+  its PR was merged, run /status-board:finish`.
   These rows come next. Each git command of this check runs under a watchdog
   (`STATUS_BOARD_WARN_SECS`, default 5, for a `[status-board] still waiting
   on …` line on stderr; `STATUS_BOARD_KILL_SECS`, default 60, to stop it); a
