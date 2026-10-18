@@ -24,10 +24,13 @@ Security properties (for auditors — each is verifiable against the code below)
   * Standard library only: imports argparse, os, re, subprocess, sys. No
     third-party packages, no dynamic imports.
   * Read-only git: the only subprocess is git (see git_out), and only commands
-    that read — symbolic-ref (one argument), ls-tree, merge-base --is-ancestor
-    and for-each-ref — to compare plans/ with the remote's main (main_drift).
-    It never fetches, pushes, commits or checks out. No git: the check is
-    skipped.
+    that read — symbolic-ref (one argument), rev-parse --verify, ls-tree and
+    for-each-ref — to compare plans/ with the remote's main (main_drift).
+    It never fetches (lazy fetching of a partial clone's missing objects is
+    switched off with --no-lazy-fetch; on git older than 2.44 the check is
+    skipped), pushes, commits or checks out; it never prompts (no stdin,
+    GIT_TERMINAL_PROMPT=0) and each call is bounded by a timeout. No git: the
+    check is skipped.
   * Read-only: every open() below uses the default read mode (see parse_readme,
     parse_next_order and fallback_desc). The script never writes, creates,
     deletes, or renames anything on disk.
@@ -313,32 +316,51 @@ def esc(s):
 
 def git_out(root, *args):
     """stdout of a read-only git command run in `root`, or None (no git, not a
-    repo, an unknown ref…). Used only by main_drift."""
+    repo, an unknown ref, git older than 2.44, a timeout…). Used only by
+    main_drift. --no-lazy-fetch stops a partial clone fetching missing objects
+    from its remote; with no stdin and no terminal prompt git can't wait on
+    the user."""
     try:
-        p = subprocess.run(["git", "-C", root, *args], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace")
-    except OSError:                       # git is not installed
+        p = subprocess.run(["git", "--no-lazy-fetch", "-C", root, *args],
+                           capture_output=True, stdin=subprocess.DEVNULL,
+                           text=True, encoding="utf-8", errors="replace",
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=5)
+    except (OSError, subprocess.TimeoutExpired):   # no git, or git hung
         return None
     return p.stdout.strip() if p.returncode == 0 else None
 
 
-def merged(root, head, ref):
-    """Whether branch `head` looks merged into `ref`: its tip is in `ref`, or
-    its upstream is gone from the remote (a merged pull request's branch
-    usually is)."""
-    if git_out(root, "merge-base", "--is-ancestor", "HEAD", ref) is not None:
-        return True
+def merged(root, head):
+    """Whether branch `head` looks merged: its upstream is gone from the remote
+    (a merged pull request's branch usually is). A fresh or detached HEAD
+    never counts, even at or behind main."""
     return bool(head) and git_out(root, "for-each-ref", "--format=%(upstream:track)",
                                   f"refs/heads/{head}") == "[gone]"
+
+
+def main_ref(root):
+    """The remote's main branch ref: origin/HEAD, else origin/main, else
+    origin/master (the first that exists), or None."""
+    ref = git_out(root, "symbolic-ref", "--quiet", REMOTE_PREFIX + "HEAD")
+    if ref:
+        return ref
+    for name in ("main", "master"):
+        if git_out(root, "rev-parse", "--verify", "--quiet", REMOTE_PREFIX + name) is not None:
+            return REMOTE_PREFIX + name
+    return None
 
 
 def main_drift(root, plans):
     """[(stem, message)] for a start or finish missed on the main branch, when
     the board is rendered on another branch or in a worktree: this checkout's
     plans/ against the remote's main as last fetched (read-only; no fetch).
-    [] with no git or remote, or on the main branch itself."""
-    ref = (git_out(root, "symbolic-ref", "--quiet", REMOTE_PREFIX + "HEAD")
-           or REMOTE_PREFIX + "main")
+    [] with no git or remote, or on the main branch itself. A squash-merged
+    branch is seen as merged only once its upstream is gone locally (`git fetch
+    --prune`); a stale origin/main can give a needless "run finish" row (finish
+    is idempotent)."""
+    ref = main_ref(root)
+    if not ref:
+        return []
     main = ref[len(REMOTE_PREFIX):]
     head = git_out(root, "symbolic-ref", "--quiet", "--short", "HEAD")
     listing = None if head == main else git_out(
@@ -353,13 +375,13 @@ def main_drift(root, plans):
     rows = [(stem(f), f"active here, still in backlog on {main} — run /status-board:start")
             for f in plan_files(os.path.join(plans, "active"))
             if on_main.get(stem(f)) == "backlog"]
-    if merged(root, head, ref):
-        for state in ("done", "wont-do"):
-            for f in plan_files(os.path.join(plans, state)):
-                there = on_main.get(stem(f))
-                if there in ("active", "backlog"):
-                    rows.append((stem(f), f"{state} here and merged, still {there} on "
-                                          f"{main} — run /status-board:finish"))
+    finished = [(stem(f), state, on_main.get(stem(f)))
+                for state in ("done", "wont-do")
+                for f in plan_files(os.path.join(plans, state))
+                if on_main.get(stem(f)) in ("active", "backlog")]
+    if finished and merged(root, head):
+        rows += [(s, f"{state} here and merged, still {there} on {main}"
+                     f" — run /status-board:finish") for s, state, there in finished]
     return rows
 
 
@@ -476,10 +498,10 @@ def main():
         # Next-order entries that match no plan in any state (typo or rename).
         # Entries whose plan moved on to active/done/... are skipped silently.
         next_missing = [s for s in (next_order or []) if s not in on_disk]
-        # Migration: a pre-0.5 board has no "next — in order" heading and may
-        # still hold its order as a bold line + list. The skill offers to migrate.
         # A start or finish missed on main (only off main, only with git).
         missed = main_drift(root, plans)
+        # Migration: a pre-0.5 board has no "next — in order" heading and may
+        # still hold its order as a bold line + list. The skill offers to migrate.
         migrate = []
         if next_order is None:
             migrate.append('no "next — in order" section (pre-0.5 board) — migrate')

@@ -42,10 +42,10 @@ def _readme(next_items=None, mentions=(), heading="## ⚪ not started — next, 
     return "\n".join(parts) + "\n"
 
 
-def _run(root, scope="full", script=SCRIPT):
+def _run(root, scope="full", script=SCRIPT, env=None):
     p = subprocess.run([sys.executable, script, "--root", str(root), "--scope", scope],
                        capture_output=True, text=True, encoding="utf-8",
-                       env=dict(os.environ, PYTHONUTF8="1"))
+                       env=env or dict(os.environ, PYTHONUTF8="1"))
     assert p.returncode == 0, p.stderr
     return p.stdout.splitlines()
 
@@ -346,35 +346,117 @@ def test_first_next_heading_wins(tmp_path):
 
 import plan_repos as repos  # noqa: E402
 
+START_ROW = f"| {repos.THING} | active here, still in backlog on main — run /status-board:start |"
+
+
+def _git_run(root):
+    return _run(root, env=repos.ENV)
+
+
+def _branch(main, tmp_path):
+    """A worktree at tmp_path/wt on a new branch "thing" from main."""
+    wt = tmp_path / "wt"
+    repos.git(main, "worktree", "add", "-q", "-b", "thing", str(wt), "main")
+    return wt
+
+
+def _start_on_branch(wt):
+    repos.git(wt, "mv", f"plans/backlog/{repos.THING}.md", f"plans/active/{repos.THING}.md")
+    repos.commit_all(wt, "started on the branch only")
+
+
+def _finished_branch(tmp_path, to="done"):
+    """A main with THING active and a pushed branch "thing" that moved it to
+    `to`/ in a commit. Returns the branch's worktree."""
+    main = repos.make(tmp_path, files=(f"active/{repos.THING}",),
+                      text=repos.readme(active=(repos.THING,)))
+    wt = _branch(main, tmp_path)
+    repos.git(wt, "push", "-q", "-u", "origin", "thing")
+    repos.git(wt, "mv", f"plans/active/{repos.THING}.md", f"plans/{to}/{repos.THING}.md")
+    repos.commit_all(wt, f"moved to {to} on the branch")
+    return wt
+
 
 def test_missed_start_flagged_from_a_branch(tmp_path):
     main = repos.make(tmp_path)
-    wt = tmp_path / "wt"
-    repos.git(main, "worktree", "add", "-q", "-b", "thing", str(wt), "main")
-    repos.git(wt, "mv", f"plans/backlog/{repos.THING}.md", f"plans/active/{repos.THING}.md")
-    repos.commit_all(wt, "started on the branch only")
-    row = f"| {repos.THING} | active here, still in backlog on main — run /status-board:start |"
-    assert _section(_run(wt), "⚠️ Drift") == [row]
-    assert not any("/status-board:" in ln for ln in _run(main))
+    wt = _branch(main, tmp_path)
+    _start_on_branch(wt)
+    assert _section(_git_run(wt), "⚠️ Drift") == [START_ROW]
+    assert not any("/status-board:" in ln for ln in _git_run(main))
+
+
+def test_missed_start_flagged_on_a_detached_head(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _branch(main, tmp_path)
+    _start_on_branch(wt)
+    repos.git(wt, "checkout", "-q", "--detach")
+    assert _section(_git_run(wt), "⚠️ Drift") == [START_ROW]
+
+
+def test_missed_start_against_master_without_origin_head(tmp_path):
+    main = repos.make(tmp_path)
+    repos.git(main, "push", "-q", "origin", "main:master")
+    repos.git(main, "remote", "set-head", "origin", "--delete")
+    repos.git(main, "update-ref", "-d", "refs/remotes/origin/main")
+    wt = _branch(main, tmp_path)
+    _start_on_branch(wt)
+    row = f"| {repos.THING} | active here, still in backlog on master — run /status-board:start |"
+    assert _section(_git_run(wt), "⚠️ Drift") == [row]
 
 
 def test_missed_finish_flagged_once_the_branch_is_gone(tmp_path):
-    main = repos.make(tmp_path, files=(f"active/{repos.THING}",),
-                      text=repos.readme(active=(repos.THING,)))
-    wt = tmp_path / "wt"
-    repos.git(main, "worktree", "add", "-q", "-b", "thing", str(wt), "main")
-    repos.git(wt, "push", "-q", "-u", "origin", "thing")
-    repos.git(wt, "mv", f"plans/active/{repos.THING}.md", f"plans/done/{repos.THING}.md")
-    repos.commit_all(wt, "finished on the branch")
-    assert not any("/status-board:" in ln for ln in _run(wt))    # not merged yet
+    wt = _finished_branch(tmp_path)
+    assert not any("/status-board:" in ln for ln in _git_run(wt))    # not merged yet
     repos.git(wt, "push", "-q", "origin", "--delete", "thing")   # merged, branch deleted
     row = (f"| {repos.THING} | done here and merged, still active on main"
            f" — run /status-board:finish |")
-    assert row in _section(_run(wt), "⚠️ Drift")
+    assert row in _section(_git_run(wt), "⚠️ Drift")
+
+
+def test_missed_finish_flagged_for_wont_do(tmp_path):
+    wt = _finished_branch(tmp_path, to="wont-do")
+    repos.git(wt, "push", "-q", "origin", "--delete", "thing")
+    row = (f"| {repos.THING} | wont-do here and merged, still active on main"
+           f" — run /status-board:finish |")
+    assert row in _section(_git_run(wt), "⚠️ Drift")
+
+
+def test_fresh_branch_is_not_taken_as_merged(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{repos.THING}",),
+                      text=repos.readme(active=(repos.THING,)))
+    wt = _branch(main, tmp_path)                       # HEAD is origin/main
+    repos.git(wt, "mv", f"plans/active/{repos.THING}.md", f"plans/done/{repos.THING}.md")
+    assert not any("/status-board:" in ln for ln in _git_run(wt))
 
 
 def test_no_main_check_without_a_remote_main(tmp_path):
-    r = _board(tmp_path, _readme(["a"], mentions=["a"]), ["active/a"])
-    repos.git(tmp_path, "init", "-q")
-    repos.commit_all(tmp_path, "no remote")
-    assert "| **⚠️ Drift** | |" not in _run(r)
+    main = tmp_path / "main"
+    repos.git(tmp_path, "init", "-q", "-b", "main", str(main))
+    for s in STATES:
+        repos.write(main, f"plans/{s}/.gitkeep", "")
+    repos.write(main, "plans/README.md", repos.readme(backlog=(repos.THING,)))
+    repos.plan(main, f"backlog/{repos.THING}")
+    repos.commit_all(main, "board, no remote")
+    wt = _branch(main, tmp_path)
+    _start_on_branch(wt)
+    assert not any("/status-board:" in ln for ln in _git_run(wt))
+
+
+def _packs(repo):
+    return sorted((repo / ".git" / "objects" / "pack").glob("*.pack"))
+
+
+def test_main_check_never_fetches_a_partial_clones_missing_trees(tmp_path):
+    main = repos.make(tmp_path)
+    origin = tmp_path / "origin.git"
+    repos.git(origin, "config", "uploadpack.allowFilter", "true")
+    tl = tmp_path / "treeless"
+    repos.git(tmp_path, "clone", "-q", "--filter=tree:0", origin.as_uri(), str(tl))
+    repos.git(tl, "checkout", "-q", "-b", "thing")
+    repos.git(main, "mv", f"plans/backlog/{repos.THING}.md", f"plans/active/{repos.THING}.md")
+    repos.commit_all(main, "started on main")
+    repos.git(main, "push", "-q", "origin", "main")
+    repos.git(tl, "fetch", "-q", "origin")             # the commit, not its trees
+    before = _packs(tl)
+    _git_run(tl)
+    assert _packs(tl) == before
