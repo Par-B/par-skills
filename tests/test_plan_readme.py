@@ -97,6 +97,16 @@ def test_find_notes():
     assert plan_readme.find_notes(text, {"nope"}) == []
 
 
+def test_sections_holding_names_every_section_with_the_plan():
+    text = readme(nxt=(THING,), backlog=(THING, OTHER))
+    assert plan_readme.sections_holding(text, {THING}) == ["next", "backlog"]
+    assert plan_readme.sections_holding(text, {"nope"}) == []
+
+
+def test_split_lines_drops_crlf():
+    assert plan_readme.split_lines("a\r\nb\n") == ["a", "b", ""]
+
+
 def test_find_notes_brace_note_with_continuation():
     note = "- `2026-01-01-thing-{design,plan}` — both,\n  wrapped onto a second line."
     text = readme(backlog=(OTHER,)).replace(BACKLOG_HEAD, BACKLOG_HEAD + note + "\n")

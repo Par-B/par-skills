@@ -162,19 +162,31 @@ def _renumber(lines):
             lines[start] = f"{n}{m.group(1)}{lines[start][m.end():]}"
 
 
-def _split(text):
+def split_lines(text):
+    """The text's lines without their endings (\\n or \\r\\n); a final newline
+    gives a last empty line, so "\\n".join() gives the text back."""
     return text.replace("\r\n", "\n").split("\n")
 
 
 def has_section(text, kind):
     """True when the README has a section of `kind` ("next" or a state)."""
-    lines = _split(text)
+    lines = split_lines(text)
     return kind in _sections(lines, _scan(lines)[0])
+
+
+def sections_holding(text, stems):
+    """The kinds of the sections (README order) with an item naming `stems`:
+    a note in a state section, or an item of the next list."""
+    lines = split_lines(text)
+    layout = _layout(lines)
+    stems = set(stems)
+    return [kind for kind in layout[0]
+            if any(named & stems for _, _, named in _items(lines, kind, layout))]
 
 
 def find_notes(text, stems):
     """The lines of every note, in a state section, that names one of `stems`."""
-    lines = _split(text)
+    lines = split_lines(text)
     layout = _layout(lines)
     stems = set(stems)
     out = []
@@ -195,7 +207,7 @@ def move_notes(text, stems, to, fallback):
     gets *(none)*. A note already in `to` stays and copies elsewhere are
     dropped. With no note anywhere, the `fallback` lines are added. Line
     endings are kept. No `to` section: `text` comes back unchanged."""
-    lines = _split(text)
+    lines = split_lines(text)
     layout = _layout(lines)
     secs = layout[0]
     if to not in secs:

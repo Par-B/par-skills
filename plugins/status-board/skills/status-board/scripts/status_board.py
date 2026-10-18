@@ -25,7 +25,8 @@ Security properties (for auditors — each is verifiable against the code below)
     subprocess, sys, time. No third-party packages, no dynamic imports.
   * Every subprocess goes through run_watched: a list argv, never a shell; no
     stdin and no prompts (GIT_TERMINAL_PROMPT=0); GIT_OPTIONAL_LOCKS=0; an
-    inherited GIT_DIR/GIT_WORK_TREE dropped. Its watchdog prints a "still
+    inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
+    GIT_COMMON_DIR or GIT_NAMESPACE dropped (REPO_ENV). Its watchdog prints a "still
     waiting" line to stderr every few seconds (STATUS_BOARD_WARN_SECS,
     default 5) and kills the command at a hard limit (STATUS_BOARD_KILL_SECS,
     default 60), or on a Ctrl-C or any error while waiting — on POSIX with
@@ -110,6 +111,9 @@ GENERIC_HEADINGS = {
 MAX_DESC = 150
 REMOTE_PREFIX = "refs/remotes/origin/"
 WARN_ENV, KILL_ENV = "STATUS_BOARD_WARN_SECS", "STATUS_BOARD_KILL_SECS"
+# inherited variables that would point git at another repo, index or object store
+REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR", "GIT_NAMESPACE")
 WARN_SECS, KILL_SECS = 5.0, 60.0
 
 
@@ -174,7 +178,7 @@ def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
     OSError (no such program) propagates."""
     warn, kill = watch_secs(warn, kill)
     log = log or sys.stderr
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    env = {k: v for k, v in os.environ.items() if k not in REPO_ENV}
     env.update(GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
     group = ({"start_new_session": True} if os.name == "posix"
              else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP})
@@ -390,11 +394,16 @@ def fallback_desc(path):
     try:
         # Read-only: read the plan file to pull a human title. Never executed.
         with open(path, encoding="utf-8", errors="replace") as fh:
-            lines = [ln.rstrip() for ln in fh]
+            return title_of(fh.read())
     except OSError:
         return "(unreadable)"
+
+
+def title_of(text):
+    """fallback_desc for a plan's text (plan_flow.py passes a git blob's):
+    its first non-generic heading, else its first prose line."""
     first_prose = None
-    for ln in lines:
+    for ln in text.splitlines():
         s = ln.strip()
         if not s or s == "---":
             continue
@@ -426,7 +435,7 @@ def git_out(root, *args):
     """stdout of a read-only git command run in `root`, or None (no git, not a
     repo, an unknown ref, git older than 2.44…). Used only by main_drift.
     --no-lazy-fetch stops a partial clone fetching missing objects from its
-    remote. run_watched drops an inherited GIT_DIR/GIT_WORK_TREE, so `-C root`
+    remote. run_watched drops an inherited GIT_DIR and the like, so `-C root`
     always means root's repo; a hung git raises Watchdog."""
     try:
         p = run_watched(["git", "--no-lazy-fetch", "-C", root, *args], root)

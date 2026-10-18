@@ -636,15 +636,23 @@ def test_watchdog_times_from_arguments_then_environment(monkeypatch):
 
 
 def test_watched_command_gets_no_stdin_no_prompts_and_no_inherited_repo(tmp_path, monkeypatch):
-    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
-    monkeypatch.setenv("GIT_WORK_TREE", "/elsewhere")
+    repo_vars = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                 "GIT_COMMON_DIR", "GIT_NAMESPACE")
+    for name in repo_vars:
+        monkeypatch.setenv(name, "/elsewhere")
     code = ("import os, sys; e = os.environ; print(sys.stdin.read() == '', "
-            "'GIT_DIR' in e, 'GIT_WORK_TREE' in e, e['GIT_TERMINAL_PROMPT'], "
+            f"any(k in e for k in {repo_vars!r}), e['GIT_TERMINAL_PROMPT'], "
             "e['GIT_OPTIONAL_LOCKS'], os.getcwd() == sys.argv[1])")
     p = board.run_watched([sys.executable, "-c", code, os.path.realpath(tmp_path)],
                           str(tmp_path))
     assert p.returncode == 0, p.stderr
-    assert p.stdout.split() == ["True", "False", "False", "0", "0", "True"]
+    assert p.stdout.split() == ["True", "False", "0", "0", "True"]
+
+
+def test_title_of_takes_the_first_real_heading_else_prose():
+    assert board.title_of("---\n# Overview\n\n## Search box\n") == "Search box"
+    assert board.title_of("\nJust prose here.\n# Overview\n") == "Just prose here."
+    assert board.title_of("") == "(no description)"
 
 
 def test_trace_logs_each_command_with_its_exit_and_time(tmp_path):

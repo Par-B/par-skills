@@ -135,6 +135,10 @@ def test_finish_into_a_state_folder_main_does_not_have(tmp_path):
     git(main, "rm", "-q", "plans/done/.gitkeep")
     repos.commit_all(main, "no done/ folder")
     git(main, "push", "-q")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    argvs = [s["argv"] for s in res["steps"] if s["kind"] == "run"]
+    mv = argvs.index(["git", "mv", f"plans/active/{THING}.md", f"plans/done/{THING}.md"])
+    assert argvs[mv - 1] == ["mkdir", "-p", "plans/done"]
     seen, _, res = repos.converge(FLOW, main, "finish", THING)
     assert seen == ["plan", "done"], res
     assert f"plans/done/{THING}.md" in repos.origin_files(main)
@@ -227,7 +231,7 @@ def test_finish_blocks_on_a_leftover_temporary_worktree_with_changes(tmp_path):
 def test_finish_plan_not_on_main(tmp_path):
     main = repos.make(tmp_path)
     rc, res = repos.check(FLOW, main, "finish", "2026-09-09-nope")
-    assert rc == 2 and res["outcome"] == "blocked", res
+    assert rc == 3 and res["outcome"] == "blocked", res
     assert "has its branch been merged" in _blocked(res) and "fetch" in _blocked(res)
     assert res["facts"] and res["steps"] == []
 
@@ -278,15 +282,44 @@ def test_finish_blocks_when_local_main_has_diverged(tmp_path):
     assert any("reset" in a for a in res["blocked"]["avoid"])
 
 
-def test_a_rejected_push_is_left_to_claude(tmp_path):
+def _rejected_push_from_the_main_checkout(tmp_path):
     main = _active_thing(tmp_path)
     _hook(tmp_path / "origin.git", "pre-receive", "exit 1")
     _, res = repos.check(FLOW, main, "finish", THING)
+    push = next(s for s in res["steps"] if s.get("argv", [])[:2] == ["git", "push"])
+    assert "it will see this commit on local main" in push["expect"]
     step, p = repos.execute(res["steps"])
-    assert step["argv"][:2] == ["git", "push"] and p.returncode != 0
+    assert step is push and p.returncode != 0
+    return main
+
+
+def test_a_rejected_push_is_explained_on_the_next_check(tmp_path):
+    main = _rejected_push_from_the_main_checkout(tmp_path)
+    own = git(main, "rev-parse", "--short=7", "HEAD")
     rc, res = repos.check(FLOW, main, "finish", THING)
-    assert rc == 5 and "ahead" in res["blocked"]["rule"], res
+    assert rc == 5 and "this check's own unpushed commit" in res["blocked"]["rule"], res
+    facts = "\n".join(res["facts"])
+    assert f"{own} Plans: {BASE} done" in facts and f"plans/done/{THING}.md" in facts
+    options = " ".join(res["blocked"]["options"])
+    assert "git push origin HEAD:refs/heads/main" in options and "user" in options
+    assert "pushing from here would take those commits along" not in res["blocked"]["why"]
     assert f"plans/active/{THING}.md" in repos.origin_files(main)
+
+
+def test_an_own_commit_after_main_moved_offers_a_rebase_with_the_users_ok(tmp_path):
+    main = _rejected_push_from_the_main_checkout(tmp_path)
+    (tmp_path / "origin.git/hooks/pre-receive").unlink()
+    other = repos.clone(tmp_path, "other")
+    repos.write(other, "src2.txt", "theirs\n")
+    repos.commit_all(other, "pushed elsewhere")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "has moved" in res["blocked"]["rule"], res
+    assert "not a fast-forward" in res["blocked"]["why"]
+    options = " ".join(res["blocked"]["options"])
+    assert "git rebase origin/main" in options and "ask the user" in options
+    assert any("without asking" in a for a in res["blocked"]["avoid"])
 
 
 @POSIX
@@ -449,3 +482,118 @@ def test_the_script_runs_only_reading_git_commands(tmp_path):
                  ("merge", "x"), ("mv", "a", "b"), ("rm", "a"), ("fetch",)):
         with pytest.raises(AssertionError):
             reader.run(str(tmp_path), *args)
+    for args in (("symbolic-ref", "HEAD", "refs/heads/x"), ("symbolic-ref", "HEAD"),
+                 ("show-ref", "main"), ("log", "--output=x", "HEAD"),
+                 ("rev-list", "--output", "x")):
+        with pytest.raises(AssertionError):
+            reader.run(str(tmp_path), *args)
+
+
+def test_git_from_a_missing_folder_is_blocked_not_called_uninstalled(tmp_path):
+    with pytest.raises(plan_flow.Blocked) as caught:
+        plan_flow.Git().run(str(tmp_path / "gone"), "rev-parse", "HEAD")
+    assert "no folder" in caught.value.data["rule"]
+
+
+def test_outside_a_repo_the_why_carries_gits_message(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    rc, res = repos.check(FLOW, plain, "finish", THING)
+    assert rc == 5 and "not a git repository" in res["blocked"]["why"].lower(), res
+
+
+# --- half-done finishes and leftovers ---------------------------------------------
+
+def test_finish_after_a_commit_failed_in_the_main_checkout(tmp_path):
+    main = _active_thing(tmp_path)
+    _hook(main / ".git", "pre-commit", f'[ "$(pwd -P)" = "{main.resolve()}" ] && exit 1; exit 0')
+    _, res = repos.check(FLOW, main, "finish", THING)
+    step, _ = repos.execute(res["steps"])
+    assert step["argv"][:2] == ["git", "commit"]
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    facts = "\n".join(res["facts"])
+    assert rc == 0 and "exactly what this finish makes" in facts, facts
+    assert "not the user's work" in facts
+    seen, _, res = repos.converge(FLOW, main, "finish", THING)
+    assert seen == ["plan", "done"], res
+    assert "already match origin/main" in "\n".join(res["facts"]), res["facts"]
+    assert f"plans/done/{THING}.md" in repos.origin_files(main)
+
+
+def test_finish_redoes_a_commit_a_temporary_worktree_did_not_push(tmp_path):
+    main = _active_thing(tmp_path)
+    repos.write(main, "src.txt", "edited\n")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    temp = res["steps"][0]["argv"][4]
+    upto = next(i for i, s in enumerate(res["steps"]) if s.get("argv", [])[:2] == ["git", "push"])
+    assert repos.execute(res["steps"][:upto]) is None
+    own = git(temp, "rev-parse", "--short=7", "HEAD")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    first = res["steps"][0]
+    assert first["argv"] == ["git", "worktree", "remove", temp], res
+    assert f"drops this check's own unpushed commit {own}" in first["expect"]
+    assert any(temp in f and "1 commit" in f and own in f for f in res["facts"]), res["facts"]
+    seen, _, res = repos.converge(FLOW, main, "finish", THING)
+    assert seen == ["plan", "done"], res
+    assert f"plans/done/{THING}.md" in repos.origin_files(main)
+    assert not os.path.exists(temp)
+
+
+def test_finish_blocks_on_a_leftover_temporary_worktree_with_other_commits(tmp_path):
+    main = _active_thing(tmp_path)
+    git(main, "switch", "-q", "-c", "other-work")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    temp = next(s for s in res["steps"] if s["argv"][1:3] == ["worktree", "add"])["argv"][4]
+    git(main, "worktree", "add", "-q", "--detach", temp, "origin/main")
+    try:
+        repos.write(temp, "x.txt", "work\n")
+        git(temp, "add", "x.txt")
+        git(temp, "commit", "-q", "-m", "someone's work")
+        rc, res = repos.check(FLOW, main, "finish", THING)
+        assert rc == 5 and res["steps"] == [], res
+        assert "someone's work" in res["blocked"]["why"] and temp in res["blocked"]["rule"]
+    finally:
+        git(main, "worktree", "remove", "--force", temp)
+
+
+def test_other_leftover_worktrees_count_untracked_files(tmp_path):
+    main = _active_thing(tmp_path)
+    other = tmp_path / "status-board-elsewhere"
+    git(main, "worktree", "add", "-q", "--detach", str(other), "origin/main")
+    repos.write(other, "stray.txt", "left\n")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    row = next(f for f in res["facts"] if f.startswith("leftover temporary worktree"))
+    assert "stray.txt" in row, row
+
+
+# --- smaller rules ------------------------------------------------------------------
+
+def test_an_insert_is_an_edit_before_a_line(tmp_path):
+    main = _active_thing(tmp_path, text=repos.readme(active=(THING,), done=(OTHER,)))
+    _, res = repos.check(FLOW, main, "finish", THING)
+    insert = next(e for e in res["steps"] if e["kind"] == "edit" and e["end"] == e["start"] - 1)
+    assert insert["old"] == [] and insert["new"] == [f"- `{THING}` — note of {THING}."]
+    assert insert["context"]["after"][0] == f"- `{OTHER}` — note of {OTHER}."
+    rc, out = repos.run(FLOW, main, "check", "finish", THING)
+    assert f"edit plans/README.md insert before line {insert['start']}" in out
+    seen, _, _ = repos.converge(FLOW, main, "finish", THING)
+    assert seen == ["plan", "done"]
+    assert _readme_on_main(main) == repos.readme(done=(THING, OTHER))
+
+
+def test_wont_do_is_ignored_for_a_plan_already_done(tmp_path):
+    main = repos.make(tmp_path, files=(f"done/{THING}",), text=repos.readme(done=(THING,)))
+    rc, res = repos.check(FLOW, main, "finish", THING, "--wont-do")
+    assert rc == 0 and res["outcome"] == "done", res
+    assert any("--wont-do is ignored" in f for f in res["facts"]), res["facts"]
+
+
+def test_finish_a_plan_with_a_non_ascii_name(tmp_path):
+    stem = "2026-01-01-thé-design"
+    main = repos.make(tmp_path, files=(f"active/{stem}",), text=repos.readme(active=(stem,)))
+    seen, _, res = repos.converge(FLOW, main, "finish", stem)
+    assert seen == ["plan", "done"], res
+    git(main, "fetch", "-q")
+    files = git(main, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only",
+                "origin/main", "--", "plans/").splitlines()
+    assert f"plans/done/{stem}.md" in files

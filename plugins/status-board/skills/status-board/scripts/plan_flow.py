@@ -21,16 +21,17 @@ Usage:  plan_flow.py check start <plan> [--branch NAME] [--sync merge|remote|bot
 Output: the outcome on the first line (PLAN (n steps), NOTHING TO DO,
 BLOCKED: <rule>, QUESTION), then Facts, then the Steps or what blocked it;
 --json prints the same as one object.
-Exit codes: 0 = a plan, a question or nothing to do; 2 = no such plan;
-5 = blocked.
+Exit codes: 0 = a plan, a question or nothing to do; 2 = bad arguments
+(argparse); 3 = no such plan; 5 = blocked.
 
 Security properties:
   * Read-only. Every subprocess is a git command that reads (Git.run refuses
-    any other: see READS), run through status_board.run_watched: a list argv,
-    no shell, no stdin, no prompts, GIT_OPTIONAL_LOCKS=0, --no-lazy-fetch,
-    under its watchdog (STATUS_BOARD_WARN_SECS / STATUS_BOARD_KILL_SECS, or
-    --warn / --timeout). It never fetches, pushes, commits, moves or writes a
-    file; the commands that do are only printed, as steps, for Claude to run.
+    any other, and any --output: see allowed), run through
+    status_board.run_watched: a list argv, no shell, no stdin, no prompts,
+    GIT_OPTIONAL_LOCKS=0, --no-lazy-fetch, under its watchdog
+    (STATUS_BOARD_WARN_SECS / STATUS_BOARD_KILL_SECS, or --warn / --timeout).
+    It never fetches, pushes, commits, moves or writes a file; the commands
+    that do are only printed, as steps, for Claude to run.
   * Every git runs with -c core.fsmonitor=false, so a repo's filesystem
     monitor command never runs; clean filters the repo itself configures can
     still run under `git status`, as with any `git status`.
@@ -55,11 +56,12 @@ REMOTE = "origin"
 PAIR = ("{}.md", "{}-design.md", "{}-plan.md")
 SUFFIXES = ("-design", "-plan")
 TERMINAL = ("done", "wont-do")
+KINDS = ("active", "next", "backlog", "future-ideas", "done", "wont-do")
 LOCAL, PUSH = 10, 120                 # step time limits, seconds
 CONTEXT = 3                           # lines of context around an edit
-SHOW = 3                              # dirty paths named per checkout
-READS = {"rev-parse", "symbolic-ref", "show-ref", "rev-list", "status", "ls-tree",
-         "cat-file", "worktree list"}
+SHOW = 3                              # paths named per list in a fact
+READS = {"rev-parse", "rev-list", "status", "ls-tree", "cat-file", "log"}
+NOT_FOUND = 3
 STEPS_HEAD = "Steps — run each alone, in order; stop at the first that fails"
 SLOW = ("local git commands shouldn't take this long — likely a lock, a filesystem "
         "monitor or a very large untracked tree")
@@ -67,13 +69,23 @@ NEVER = "never reset, stash, rebase or force-push to get past this"
 
 
 class Blocked(Exception):
-    """A rule the check cannot get past; exit `code` (5, or 2 for no such plan)."""
+    """A rule the check cannot get past; exit `code` (5, or NOT_FOUND)."""
 
     def __init__(self, rule, why, safe=(), avoid=(), options=(), code=5):
         super().__init__(rule)
         self.code = code
         self.data = {"rule": rule, "why": why, "safe": list(safe),
                      "avoid": list(avoid) or [NEVER], "options": list(options)}
+
+
+def allowed(args):
+    """True for the git commands the check may run: ones that only read.
+    symbolic-ref only in its one-ref form (with two it moves a ref)."""
+    if not args or any(a.startswith("--output") for a in args):
+        return False
+    if args[0] == "symbolic-ref":
+        return len(args) == 3 and args[1] == "--quiet" and not args[2].startswith("-")
+    return args[0] in READS or tuple(args[:2]) == ("worktree", "list")
 
 
 class Git:
@@ -84,13 +96,16 @@ class Git:
 
     def run(self, cwd, *args):
         """The CompletedProcess of `git args` in `cwd`; refuses a command
-        outside READS. A hung git raises status_board.Watchdog."""
-        if args[0] not in READS and " ".join(args[:2]) not in READS:
+        `allowed` does not. A hung git raises status_board.Watchdog."""
+        if not allowed(args):
             raise AssertionError(f"not a reading git command: {args}")
+        if not os.path.isdir(cwd):
+            raise Blocked(f"no folder {cwd}", "git was to run there, and it does not exist",
+                          options=["run the check from inside the project"])
         try:
-            return sb.run_watched(["git", "-c", "core.fsmonitor=false", "--no-lazy-fetch",
-                                   *args], cwd,
-                                  self.warn, self.kill, self.trace)
+            return sb.run_watched(["git", "-c", "core.fsmonitor=false", "-c",
+                                   "core.quotepath=false", "--no-lazy-fetch", *args],
+                                  cwd, self.warn, self.kill, self.trace)
         except OSError:
             raise Blocked("git is not installed", "the check reads the repo with git",
                           options=["install git 2.44 or newer"]) from None
@@ -128,10 +143,39 @@ def guarded_paths(plans, base):
         for state in sb.STATES for pat in PAIR for ext in ("", ".tasks.json")]
 
 
+def own_subjects(base):
+    """The subjects of the commits these checks have Claude make."""
+    return {f"Plans: start {base}", f"Plans: {base} done", f"Plans: {base} won't do"}
+
+
 def changed(g, path, *args):
     """The paths `git status --porcelain args` lists in checkout `path`."""
-    p = g.run(path, "status", "--porcelain", *args)
+    p = g.run(path, "status", "--porcelain", "--no-renames", *args)
     return [line[3:] for line in p.stdout.splitlines() if line[3:]] if not p.returncode else []
+
+
+def commits(g, top, rng):
+    """[(short sha, subject, [paths])] of the commits in `rng`, newest first."""
+    out = g.run(top, "log", "--format=%x01%h %s", "--name-only", rng).stdout
+    res = []
+    for chunk in out.split("\x01")[1:]:
+        head, *paths = [ln for ln in chunk.splitlines() if ln]
+        sha, _, subject = head.partition(" ")
+        res.append((sha, subject, paths))
+    return res
+
+
+def only_own(found, plans, base):
+    """True when every commit in `found` is one of these checks' own: an own
+    subject, and only paths under plans/."""
+    return bool(found) and all(subject in own_subjects(base) and
+                               all(p.startswith(plans + "/") for p in paths)
+                               for _, subject, paths in found)
+
+
+def listed(found):
+    return "; ".join(f"{sha} {subject} ({names(paths) or 'no paths'})"
+                     for sha, subject, paths in found)
 
 
 def mentions(text, stems):
@@ -144,36 +188,12 @@ def mentions(text, stems):
     return found & set(stems)
 
 
-def title(text):
-    """status_board.fallback_desc for a file's text (a git blob here)."""
-    prose = None
-    for s in (ln.strip() for ln in text.splitlines()):
-        if not s or s == "---":
-            continue
-        if s.startswith("#"):
-            h = s.lstrip("#").strip()
-            norm = sb.FUTURE_PREFIX_RE.sub("", h).strip().lower()
-            if norm and norm not in sb.GENERIC_HEADINGS:
-                return sb.clean(h)
-        elif prose is None:
-            prose = s
-    return sb.clean(prose) if prose else "(no description)"
-
-
 def fallback_note(found, base, first_text):
     """A README note for a plan the README does not mention: slug and title."""
     stems = {sb.stem(f) for _, f in found}
     slug = (f"{base}-{{design,plan}}" if {f"{base}-design", f"{base}-plan"} <= stems
             else sb.stem(found[0][1]))
-    return [f"- `{slug}` — {title(first_text)}"]
-
-
-def notes_in(text, stems):
-    """The README sections (kinds) that hold a note or next-list item naming `stems`."""
-    lines = plan_readme._split(text)
-    layout = plan_readme._layout(lines)
-    return [k for k in layout[0]
-            if any(named & stems for *_, named in plan_readme._items(lines, k, layout))]
+    return [f"- `{slug}` — {sb.title_of(first_text)}"]
 
 
 def hunks(cwd, rel, old, new, review):
@@ -181,7 +201,7 @@ def hunks(cwd, rel, old, new, review):
     line numbers hold when the ones below it are done. `before` context is
     the old text (not yet edited above); `after` is the new text (edited
     below)."""
-    a, b = plan_readme._split(old), plan_readme._split(new)
+    a, b = plan_readme.split_lines(old), plan_readme.split_lines(new)
     ops = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
     return [{"kind": "edit", "cwd": cwd, "path": rel, "start": i1 + 1, "end": i2,
              "old": a[i1:i2], "new": b[j1:j2],
@@ -201,13 +221,21 @@ def ago(path):
     return f"{max(secs, 0):.0f} s ago"
 
 
+def names(paths):
+    shown = ", ".join(paths[:SHOW])
+    return shown + (f" and {len(paths) - SHOW} more" if len(paths) > SHOW else "")
+
+
 def worktrees(g, top):
-    """[{path, branch, prunable}] of every checkout of the repo (bare ones left out)."""
+    """[{path, head, branch, prunable}] of every checkout (bare ones left out)."""
     out, cur = [], None
     for line in (g(top, "worktree", "list", "--porcelain") or "").splitlines():
         if line.startswith("worktree "):
-            cur = {"path": line[len("worktree "):], "branch": None, "prunable": False}
+            cur = {"path": line[len("worktree "):], "head": None, "branch": None,
+                   "prunable": False}
             out.append(cur)
+        elif cur and line.startswith("HEAD "):
+            cur["head"] = line[len("HEAD "):]
         elif cur and line.startswith("branch refs/heads/"):
             cur["branch"] = line[len("branch refs/heads/"):]
         elif cur and line.startswith("prunable"):
@@ -216,35 +244,6 @@ def worktrees(g, top):
             out.remove(cur)
             cur = None
     return out
-
-
-def names(paths):
-    shown = ", ".join(paths[:SHOW])
-    return shown + (f" and {len(paths) - SHOW} more" if len(paths) > SHOW else "")
-
-
-def main_facts(g, facts, top, main):
-    """Facts about main; returns (upstream sha, local sha or None, ahead, behind)."""
-    up = f"refs/remotes/{REMOTE}/{main}"
-    common = g(top, "rev-parse", "--git-common-dir") or ".git"
-    fetched = ago(os.path.join(top, common, "FETCH_HEAD"))
-    when = f"last fetched {fetched}" if fetched else "never fetched"
-    facts.append(f"main: {main} ({REMOTE}/{main} {when}; the check does not fetch)")
-    upstream = g(top, "rev-parse", "--verify", "--quiet", up)
-    if not upstream:
-        raise Blocked(f"no {REMOTE}/{main}", f"there is no {REMOTE}/{main} to compare "
-                      f"with", safe=[f"git fetch {REMOTE}"],
-                      options=[f"fetch {REMOTE}, then check again"])
-    local = g(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{main}")
-    ahead = behind = 0
-    if local:
-        ahead = int(g(top, "rev-list", "--count", f"{up}..{local}") or 0)
-        behind = int(g(top, "rev-list", "--count", f"{local}..{up}") or 0)
-        facts.append(f"local {main}: {ahead} ahead, {behind} behind {REMOTE}/{main} "
-                     f"({upstream[:7]})")
-    else:
-        facts.append(f"local {main}: none; {REMOTE}/{main} is at {upstream[:7]}")
-    return upstream, local, ahead, behind
 
 
 def checkout_facts(g, facts, wts, plans, guarded):
@@ -272,22 +271,112 @@ def checkout_facts(g, facts, wts, plans, guarded):
         facts.append(f"checkout {w['path']} {on}: {'; '.join(dirt) or 'clean'}")
 
 
-def ahead_rule(main, ahead, behind):
+def survey(g, facts, top, plans, base):
+    """Read what both checks start from, adding facts as it goes: the main
+    branch and origin/main, local main ahead/behind (and its commits when
+    ahead), every checkout, origin/main's plans/ tree, the plan's files here
+    and there, and the README there. Returns them as a dict."""
+    prefix = f"refs/remotes/{REMOTE}/"
+    ref = g(top, "symbolic-ref", "--quiet", prefix + "HEAD") or ""
+    main = ref[len(prefix):] if ref.startswith(prefix) else "main"
+    on = f"{REMOTE}/{main}"
+    common = g(top, "rev-parse", "--git-common-dir") or ".git"
+    fetched = ago(os.path.join(top, common, "FETCH_HEAD"))
+    facts.append(f"main: {main} ({on} {'last fetched ' + fetched if fetched else 'never fetched'}"
+                 f"; the check does not fetch)")
+    upstream = g(top, "rev-parse", "--verify", "--quiet", prefix + main)
+    if not upstream:
+        raise Blocked(f"no {on}", f"there is no {on} to compare with",
+                      safe=[f"git fetch {REMOTE}"], options=[f"fetch {REMOTE}, then check again"])
+    s = {"main": main, "on": on, "upstream": upstream, "mine": [], "own": False,
+         "local": g(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{main}"),
+         "ahead": 0, "behind": 0}
+    if s["local"]:
+        s["ahead"] = int(g(top, "rev-list", "--count", f"{upstream}..{s['local']}") or 0)
+        s["behind"] = int(g(top, "rev-list", "--count", f"{s['local']}..{upstream}") or 0)
+        facts.append(f"local {main}: {s['ahead']} ahead, {s['behind']} behind {on} "
+                     f"({upstream[:7]})")
+    else:
+        facts.append(f"local {main}: none; {on} is at {upstream[:7]}")
+    if s["ahead"]:
+        s["mine"] = commits(g, top, f"{upstream}..{s['local']}")
+        s["own"] = only_own(s["mine"], plans, base)
+        facts.append(f"local {main}'s commits not on {on}: {listed(s['mine'])}"
+                     + (" — only this check's own plans-only commit(s)" if s["own"] else ""))
+    s["wts"] = worktrees(g, top)
+    checkout_facts(g, facts, s["wts"], plans, guarded_paths(plans, base))
+    s["mc"] = next((w for w in s["wts"] if w["branch"] == main), None)
+    tree = {}
+    for entry in g.run(top, "ls-tree", "-r", "-z", upstream, "--", f"{plans}/").stdout.split("\0"):
+        meta, _, path = entry.partition("\t")
+        if path:
+            mode, _, oid = meta.split(" ")
+            tree[path] = (mode, oid)
+    s["tree"] = tree
+    here = find_pair(lambda p: os.path.isfile(os.path.join(top, p)), plans, base)
+    s["found"] = find_pair(tree.__contains__, plans, base)
+    facts.append(f"in this checkout: {names([f'{plans}/{st}/{f}' for st, f in here]) or 'none'}")
+    facts.append(f"on {on}: {names([f'{plans}/{st}/{f}' for st, f in s['found']]) or 'none'}")
+    s["readme"] = readme = f"{plans}/README.md"
+    s["text"] = blob(g, top, s, readme)
+    if s["text"] is not None:
+        kinds = [k for k in KINDS if plan_readme.has_section(s["text"], k)]
+        held = plan_readme.sections_holding(s["text"], {sb.stem(f) for _, f in s["found"]})
+        facts.append(f"{readme} on {on}: sections {', '.join(kinds) or 'none'}; the "
+                     f"plan's notes in {', '.join(held) or 'none'}")
+    return s
+
+
+def blob(g, top, s, rel):
+    """The text of `rel` on origin/main (line endings made \\n), or None."""
+    return g.run(top, "cat-file", "blob", s["tree"][rel][1]).stdout if rel in s["tree"] else None
+
+
+def ahead_rule(s, plans, base):
+    """Blocked when local main has commits origin/main lacks."""
+    main, on, ahead, behind = s["main"], s["on"], s["ahead"], s["behind"]
     if not ahead:
         return
-    how = "has diverged from" if behind else "is ahead of"
+    where = s["mc"]["path"] if s["mc"] else f"a checkout of {main}"
+    if s["own"]:
+        ask = ["don't rebase, reset or drop the commit without asking the user first",
+               "never force-push"]
+        drop = (f"or ask the user, then drop it (git reset --keep {on} in {where}) and "
+                f"check again: this plan redoes it")
+        if behind:
+            raise Blocked(
+                f"local {main} holds this check's own unpushed commit, and {on} has moved",
+                f"local {main} has {listed(s['mine'])}, which {on} lacks, and {on} has "
+                f"{behind} commit(s) local {main} lacks, so the push was rejected as not "
+                f"a fast-forward",
+                safe=[f"see both sides: git log --oneline --left-right {main}...{on}"],
+                avoid=ask,
+                options=[f"ask the user, then in {where}: git rebase {on} (it replays that "
+                         f"one plans-only commit on top), then check again", drop])
+        raise Blocked(
+            f"local {main} holds this check's own unpushed commit",
+            f"local {main} has {listed(s['mine'])}, which {on} lacks: its push did not "
+            f"go through",
+            safe=[f"see it: git show --stat {main}"], avoid=ask,
+            options=[f"read why the push failed; once that is fixed, push it from "
+                     f"{where}: git push {REMOTE} HEAD:refs/heads/{main}, then check again",
+                     drop])
+    if behind:
+        why = (f"local {main} has {ahead} commit(s) {on} lacks ({listed(s['mine'])}) and "
+               f"lacks {behind} of {on}'s; plans-only commits go to {main} alone, so "
+               f"those local commits must be settled first")
+    else:
+        why = (f"local {main} has {ahead} commit(s) {on} lacks ({listed(s['mine'])}); "
+               f"plans-only commits go to {main} alone, and pushing from here would "
+               f"take those commits along")
     raise Blocked(
-        f"local {main} {how} {REMOTE}/{main}",
-        f"local {main} has {ahead} commit(s) {REMOTE}/{main} lacks"
-        + (f" and lacks {behind} of its" if behind else "")
-        + f"; plans-only commits go to {main} alone, and pushing from here would "
-          f"take those commits along",
-        safe=[f"see them: git log {REMOTE}/{main}..{main}",
-              f"git fetch {REMOTE}, in case {REMOTE}/{main} is just stale"],
-        avoid=[NEVER, f"don't push {main} to get past this unless those commits "
-                      f"belong on {main}"],
-        options=[f"push those commits if they belong on {main} (the user decides), "
-                 f"or move them to a branch, then check again"])
+        f"local {main} {'has diverged from' if behind else 'is ahead of'} {on}", why,
+        safe=[f"see them: git log {on}..{main}",
+              f"git fetch {REMOTE}, in case {on} is just stale"],
+        avoid=[NEVER, f"don't push {main} to get past this unless those commits belong "
+                      f"on {main}"],
+        options=[f"the user decides: push those commits (merging {on} first if it moved) "
+                 f"if they belong on {main}, or move them to a branch; then check again"])
 
 
 def temp_path(top, base):
@@ -296,92 +385,161 @@ def temp_path(top, base):
                                          f"status-board-{base}-{tag}"))
 
 
-def leftovers(g, facts, wts, temp):
-    """Facts on leftover status-board-* worktrees; whether `temp` (the one this
-    check would use, or None) is a clean registered one, to remove first.
-    Blocked when `temp` holds changes or a folder is in its way."""
-    registered = False
-    for w in wts:
-        if os.path.basename(w["path"]).startswith("status-board-"):
-            dirt = w["guarded"] + w["outside"]
-            facts.append(f"leftover temporary worktree {w['path']}: "
-                         f"{'changes: ' + names(dirt) if dirt else 'clean'}")
-            if not temp or os.path.realpath(w["path"]) != temp:
-                continue
-            registered = True
-            loose = changed(g, temp, "--untracked-files=all") if not w["missing"] else []
-            if loose:
-                raise Blocked(
-                    f"the temporary worktree {temp} has changes",
-                    f"a leftover from an earlier run holds uncommitted work "
-                    f"({names(loose)}); removing it would lose that",
-                    safe=[f"look at it: git -C {shlex.quote(temp)} status"],
-                    avoid=[NEVER, "don't remove it with --force"],
-                    options=["keep what is worth keeping, then git worktree remove "
-                             f"{shlex.quote(temp)} and check again"])
-    if temp and not registered and os.path.isdir(temp) and os.listdir(temp):
+def leftovers(g, facts, s, top, plans, base, temp):
+    """Facts on leftover status-board-* worktrees. Returns None, or, when
+    `temp` (the one this check would use) is registered and may go,
+    {"own": [shas]}: this check's own unpushed commits it holds, which the
+    plan redoes. Blocked when it holds changes or other commits, or a
+    folder is in its way."""
+    stale = None
+    for w in s["wts"]:
+        if not os.path.basename(w["path"]).startswith("status-board-"):
+            continue
+        loose = [] if w["missing"] else changed(g, w["path"], "--untracked-files=all")
+        ahead = commits(g, top, f"{s['upstream']}..{w['head']}") if w["head"] else []
+        facts.append(f"leftover temporary worktree {w['path']}: HEAD "
+                     f"{(w['head'] or '?')[:7]}, {len(ahead)} commit(s) not on {s['on']}"
+                     + (f" ({listed(ahead)})" if ahead else "")
+                     + f"; {'changes: ' + names(loose) if loose else 'no uncommitted changes'}")
+        if not temp or os.path.realpath(w["path"]) != temp:
+            continue
+        look = f"git -C {shlex.quote(temp)}"
+        if loose:
+            raise Blocked(
+                f"the temporary worktree {temp} has changes",
+                f"a leftover from an earlier run holds uncommitted work "
+                f"({names(loose)}); removing it would lose that",
+                safe=[f"look at it: {look} status"],
+                avoid=[NEVER, "don't remove it with --force"],
+                options=["keep what is worth keeping, then git worktree remove "
+                         f"{shlex.quote(temp)} and check again"])
+        if ahead and not only_own(ahead, plans, base):
+            raise Blocked(
+                f"the temporary worktree {temp} holds commits not on {s['on']}",
+                f"a leftover from an earlier run holds {listed(ahead)}; removing it "
+                f"would leave them unreachable",
+                safe=[f"look: {look} log --stat {s['on']}..HEAD"],
+                avoid=[NEVER, "don't remove it while it holds those commits"],
+                options=[f"the user decides: keep them on a branch ({look} branch <name>), "
+                         f"then git worktree remove {shlex.quote(temp)} and check again"])
+        stale = {"own": [sha for sha, _, _ in ahead]}
+        if ahead:
+            facts.append(f"{temp} holds this check's own unpushed commit(s) "
+                         f"{', '.join(stale['own'])}, which this plan redoes")
+    if temp and stale is None and os.path.isdir(temp) and os.listdir(temp):
         facts.append(f"a folder {temp} is in the way (not a worktree)")
         raise Blocked(f"{temp} is in the way",
                       "the temporary worktree goes there, and the folder is not empty",
                       safe=[f"look at what is in {temp}"],
                       avoid=[NEVER, "don't delete it unless you know what it holds"],
                       options=["move or delete it, then check again"])
-    return registered
+    return stale
 
 
-def finish(g, facts, top, plans, base, wont_do):
-    """(outcome, steps) for finishing plan `base` on main."""
-    main = (g(top, "symbolic-ref", "--quiet", f"refs/remotes/{REMOTE}/HEAD") or "")
-    main = main.rsplit(f"refs/remotes/{REMOTE}/", 1)[-1] if main else "main"
-    upstream, local, ahead, behind = main_facts(g, facts, top, main)
-    on = f"{REMOTE}/{main}"
-    wts = worktrees(g, top)
-    checkout_facts(g, facts, wts, plans, guarded_paths(plans, base))
-    tree = {}
-    for line in (g(top, "ls-tree", "-r", upstream, "--", f"{plans}/") or "").splitlines():
-        meta, _, path = line.partition("\t")
-        mode, _, oid = meta.split(" ")
-        tree[path] = (mode, oid)
-    here = find_pair(lambda p: os.path.isfile(os.path.join(top, p)), plans, base)
-    found = find_pair(tree.__contains__, plans, base)
-    facts.append(f"in this checkout: {names([f'{plans}/{s}/{f}' for s, f in here]) or 'none'}")
-    facts.append(f"on {on}: {names([f'{plans}/{s}/{f}' for s, f in found]) or 'none'}")
-    readme = f"{plans}/README.md"
-    text = g.run(top, "cat-file", "blob", tree[readme][1]).stdout if readme in tree else None
-    stems = {sb.stem(f) for _, f in found}
-    if text is not None:
-        kinds = [k for k in ("active", "next", "backlog", "future-ideas", "done", "wont-do")
-                 if plan_readme.has_section(text, k)]
-        facts.append(f"{readme} on {on}: sections {', '.join(kinds) or 'none'}; the "
-                     f"plan's notes in {', '.join(notes_in(text, stems)) or 'none'}")
-    ahead_rule(main, ahead, behind)
-    if not found:
-        raise Blocked(f"{base} is not on {on}",
-                      f"has its branch been merged? fetch first: {on} is as last "
-                      f"fetched, and the check does not fetch",
-                      safe=[f"git fetch {REMOTE}", "check the plan's name"],
-                      options=["fetch, then check again", "merge the plan's branch first"],
-                      code=2)
-    ended = [s for s, _ in found if s in TERMINAL]
-    to = ended[0] if ended else ("wont-do" if wont_do else "done")
-    word = "done" if to == "done" else "won't do"
-    facts.append(f"target: {to}/" + (f" (it is in {to}/ already)" if ended else ""))
-    fix = [f"on a branch or on {main}: add the section, push, fetch, then check again"]
-    if text is None:
-        raise Blocked(f"no {readme} on {on}", "the plan's note has nowhere to go",
-                      safe=["set the board up on main (the status-board skill)"],
-                      options=fix)
-    if not plan_readme.has_section(text, to):
-        raise Blocked(f"no {to} section in {readme} on {on}",
-                      f"{readme} on {on} has no {to} section for the plan's note",
-                      safe=["read the README's headings"], options=fix)
+def matches(path, rel, want):
+    """True when checkout `path` holds `rel` as `want` (text, or None: absent);
+    line endings aside."""
+    full = os.path.join(path, rel)
+    if not os.path.isfile(full):
+        return want is None
+    with open(full, encoding="utf-8", errors="replace") as fh:
+        return want is not None and fh.read() == want
 
-    pairs = sorted({f for _, f in found})
-    moves = [(f"{plans}/{s}/{f}", f"{plans}/{to}/{f}") for s, f in found if s != to]
-    drops = [p for s in sb.STATES for f in pairs
-             if (p := f"{plans}/{s}/{f}.tasks.json") in tree]
-    filled, plan, differ = {}, [], []     # filled: dst -> the src moved there
-    for src, dst in moves:                # check every move before planning one
+
+def workspace(g, facts, s, top, plans, base, target):
+    """Where the work happens: the main checkout when it is on main and clean
+    (outside plans/, and the plan's paths), else a temporary worktree.
+    `target` maps each path the plan changes to its new text (None: gone),
+    so a busy main checkout whose changes are an earlier run's is told
+    apart from the user's work."""
+    mc = s["mc"]
+    busy = mc and (mc["missing"] or mc["merging"] or mc["guarded"] or mc["outside"])
+    if busy:
+        dirt = mc["guarded"] + mc["outside"]
+        if mc["missing"]:
+            why = "its folder is missing"
+        elif mc["merging"]:
+            why = "it is in the middle of a merge"
+        elif not mc["outside"] and all(matches(mc["path"], p, blob(g, top, s, p))
+                                       for p in dirt):
+            why = (f"its uncommitted changes ({names(dirt)}) already match {s['on']} — "
+                   f"left by an earlier run, not the user's work")
+        elif not mc["outside"] and all(
+                matches(mc["path"], p, target[p] if p in target else blob(g, top, s, p))
+                for p in dirt):
+            why = (f"its uncommitted changes ({names(dirt)}) are exactly what this finish "
+                   f"makes — left by an earlier run whose commit or push did not go "
+                   f"through, not the user's work")
+        else:
+            why = f"it has uncommitted changes ({names(dirt)})"
+        facts.append(f"the {s['main']} checkout at {mc['path']} is left as it was: {why}; "
+                     f"pull it when ready")
+    temp = None if mc and not busy else temp_path(top, base)
+    work = temp or mc["path"]
+    facts.append(f"workspace: a temporary worktree {temp}" if temp else
+                 f"workspace: the {s['main']} checkout {work}")
+    stale = leftovers(g, facts, s, top, plans, base, temp)
+    return {"mc": mc, "busy": bool(busy), "temp": temp, "work": work, "stale": stale}
+
+
+def enter_steps(s, w, top, change):
+    """Steps that make the workspace ready: a temporary worktree of
+    origin/main (removing this check's own leftover first), or the main
+    checkout brought level."""
+    steps, temp, on = [], w["temp"], s["on"]
+    if change and temp:
+        if w["stale"] is not None:
+            own = w["stale"]["own"]
+            steps.append(run_step(top, ["git", "worktree", "remove", temp],
+                                  f"the leftover {temp} is gone"
+                                  + (f"; this drops this check's own unpushed commit "
+                                     f"{', '.join(own)}, which this plan redoes" if own else "")))
+        steps.append(run_step(top, ["git", "worktree", "add", "--detach", temp, on],
+                              f"a detached checkout of {on} ({s['upstream'][:7]}) at {temp}"))
+    if w["mc"] and not w["busy"] and s["behind"]:
+        steps.append(run_step(w["work"], ["git", "merge", "--ff-only", on],
+                              f"the {s['main']} checkout is at {on} ({s['upstream'][:7]})"))
+    return steps
+
+
+def publish_steps(s, w, top, msg, touched):
+    """Commit just `touched` in the workspace, push it to main, and remove a
+    temporary worktree."""
+    main, on, temp, work = s["main"], s["on"], w["temp"], w["work"]
+    if temp:
+        rejected = (f"if it is rejected, check again: the commit stays in {temp}, and "
+                    f"the check drops and redoes it")
+    else:
+        rejected = (f"if it is rejected, don't retry, reset or rebase: check again — it "
+                    f"will see this commit on local {main} and say what to do")
+    steps = [run_step(work, ["git", "commit", "-m", msg, "--", *touched],
+                      f"one commit \"{msg}\" on {s['upstream'][:7]}, holding only those "
+                      f"paths"),
+             run_step(work, ["git", "push", REMOTE, f"HEAD:refs/heads/{main}"],
+                      f"{on} at the new commit; {rejected}", PUSH)]
+    if temp:
+        steps.append(run_step(top, ["git", "worktree", "remove", temp], f"{temp} is gone"))
+    return steps
+
+
+def leave_steps(s, w, top, change):
+    """Move local main to origin/main when no checkout has it (it was not ahead)."""
+    if s["local"] and not w["mc"] and (s["behind"] or change):
+        return [run_step(top, ["git", "branch", "-f", s["main"], s["on"]],
+                         f"local {s['main']} is at {s['on']}")]
+    return []
+
+
+def moves_to(s, plans, to):
+    """([(how, src, dst)], [tracker]) that put the plan's files in `to`/ on
+    origin/main: "mv", or "rm" for a copy identical to the one kept. Every
+    move is checked first; Blocked when a copy to drop differs."""
+    tree, on = s["tree"], s["on"]
+    filled, plan, differ = {}, [], []    # filled: dst -> the src moved there
+    for state, f in s["found"]:
+        if state == to:
+            continue
+        src, dst = f"{plans}/{state}/{f}", f"{plans}/{to}/{f}"
         kept = filled.get(dst) or (dst if dst in tree else None)
         if kept is None:
             filled[dst] = src
@@ -391,80 +549,18 @@ def finish(g, facts, top, plans, base, wont_do):
         else:
             plan.append(("rm", src, dst))
     if differ:
-        listed = "; ".join(f"{s} and {d}" for s, d in differ)
+        pairs = "; ".join(f"{a} and {b}" for a, b in differ)
         raise Blocked(
             "a copy that would be dropped differs from the kept one",
-            f"on {on}, {listed} differ; finish keeps the copy in {to}/ and would "
-            f"delete the other",
-            safe=[f"compare: git diff {on}:{s} {on}:{d}" for s, d in differ],
+            f"on {on}, {pairs} differ; finish keeps the copy in {to}/ and would delete "
+            f"the other",
+            safe=[f"compare: git diff {on}:{a} {on}:{b}" for a, b in differ],
             avoid=[NEVER, "never delete a copy that differs from the kept one"],
-            options=[f"keep one (or make them the same) on a branch or on {main}, "
+            options=[f"keep one (or make them the same) on a branch or on {s['main']}, "
                      f"push, fetch, then check again"])
-    had_note = bool(plan_readme.find_notes(text, stems))
-    first = g.run(top, "cat-file", "blob", tree[f"{plans}/{found[0][0]}/{found[0][1]}"][1])
-    try:
-        new = plan_readme.move_notes(text, stems, to,
-                                     fallback_note(found, base, first.stdout))
-    except ValueError as e:
-        raise Blocked(f"could not plan the {readme} edit", str(e),
-                      safe=[f"read {readme} on {on} around the plan's notes"],
-                      options=["move the note by hand on main, then check again"]) from None
-
-    mc = next((w for w in wts if w["branch"] == main), None)
-    busy = mc and (mc["missing"] or mc["merging"] or mc["guarded"] or mc["outside"])
-    if busy:
-        why = ("its folder is missing" if mc["missing"] else
-               "it is in the middle of a merge" if mc["merging"] else
-               f"it has uncommitted changes ({names(mc['guarded'] + mc['outside'])})")
-        facts.append(f"the {main} checkout at {mc['path']} is left as it was: {why}; "
-                     f"pull it when ready")
-    temp = None if mc and not busy else temp_path(top, base)
-    work = temp or mc["path"]
-    facts.append(f"workspace: a temporary worktree {temp}" if temp else
-                 f"workspace: the {main} checkout {work}")
-    stale = leftovers(g, facts, wts, temp)
-
-    change = bool(plan or drops or new != text)
-    steps = []
-    if change and temp:
-        if stale:
-            steps.append(run_step(top, ["git", "worktree", "remove", temp],
-                                  f"the leftover {temp} is gone"))
-        steps.append(run_step(top, ["git", "worktree", "add", "--detach", temp, on],
-                              f"a detached checkout of {on} ({upstream[:7]}) at {temp}"))
-    if mc and not busy and behind:
-        steps.append(run_step(work, ["git", "merge", "--ff-only", on],
-                              f"the {main} checkout is at {on} ({upstream[:7]})"))
-    if change:
-        touched = []
-        steps += move_steps(work, tree, plan, drops, touched)
-        if new != text:
-            review = (f"re-read the {to} section and the next list: the note for {base} "
-                      f"should describe it as {'done' if to == 'done' else 'dropped'}, "
-                      f"and no item for it should be left in the next list")
-            if not had_note:
-                review += "; the note was made up from the plan's title — reword it if needed"
-                for s in sorted(mentions(text, stems)):
-                    review += f"; {s} is also named outside a list note — check that entry"
-            steps += hunks(work, readme, text, new, review)
-            steps.append(run_step(work, ["git", "add", "--", readme], f"{readme} staged"))
-            touched.append(readme)
-        msg = f"Plans: {base} {word}"
-        steps.append(run_step(work, ["git", "commit", "-m", msg, "--", *touched],
-                              f"one commit \"{msg}\" on {upstream[:7]}, holding only "
-                              f"those paths"))
-        steps.append(run_step(work, ["git", "push", REMOTE, f"HEAD:refs/heads/{main}"],
-                              f"{on} at the new commit; a rejection means {main} moved: "
-                              f"leave it, fetch and check again", PUSH))
-        if temp:
-            steps.append(run_step(top, ["git", "worktree", "remove", temp], f"{temp} is gone"))
-    if local and not mc and (behind or change):
-        steps.append(run_step(top, ["git", "branch", "-f", main, on],
-                              f"local {main} is at {on}"))
-    if not steps:
-        facts.append(f"{base} is in {to}/ on {on} with its note and no tracker")
-        return "done", []
-    return "plan", steps
+    drops = [p for st in sb.STATES for f in sorted({f for _, f in s["found"]})
+             if (p := f"{plans}/{st}/{f}.tasks.json") in tree]
+    return plan, drops
 
 
 def move_steps(work, tree, plan, drops, touched):
@@ -477,22 +573,80 @@ def move_steps(work, tree, plan, drops, touched):
         if how == "rm":
             steps.append(run_step(work, ["git", "rm", "--quiet", "--", src],
                                   f"{src} removed and staged (the same as {dst})"))
-        elif dst.rsplit("/", 1)[0] in dirs:
-            steps.append(run_step(work, ["git", "mv", src, dst], f"{dst} staged; {src} gone"))
-        else:                             # git mv will not make the folder
-            mode, oid = tree[src]
-            steps += [
-                run_step(work, ["git", "update-index", "--add", "--cacheinfo",
-                                f"{mode},{oid},{dst}"], f"{dst} staged with {src}'s content"),
-                run_step(work, ["git", "checkout", "--", dst],
-                         f"{dst} written (and its folder made)"),
-                run_step(work, ["git", "rm", "--quiet", "--", src], f"{src} removed and staged")]
-            dirs.add(dst.rsplit("/", 1)[0])
+            continue
+        folder = dst.rsplit("/", 1)[0]
+        if folder not in dirs:            # git mv will not make it
+            steps.append(run_step(work, ["mkdir", "-p", folder], "the folder exists"))
+            dirs.add(folder)
+        steps.append(run_step(work, ["git", "mv", src, dst], f"{dst} staged; {src} gone"))
     for src in drops:
         touched.append(src)
         steps.append(run_step(work, ["git", "rm", "--quiet", "--", src],
                               f"the tracker {src} removed and staged"))
     return steps
+
+
+def finish(g, facts, top, plans, base, wont_do):
+    """(outcome, steps) for finishing plan `base` on main."""
+    s = survey(g, facts, top, plans, base)
+    main, on, found, text, readme = s["main"], s["on"], s["found"], s["text"], s["readme"]
+    ahead_rule(s, plans, base)
+    if not found:
+        raise Blocked(f"{base} is not on {on}",
+                      f"has its branch been merged? fetch first: {on} is as last "
+                      f"fetched, and the check does not fetch",
+                      safe=[f"git fetch {REMOTE}", "check the plan's name"],
+                      options=["fetch, then check again", "merge the plan's branch first"],
+                      code=NOT_FOUND)
+    ended = [st for st, _ in found if st in TERMINAL]
+    to = ended[0] if ended else ("wont-do" if wont_do else "done")
+    facts.append(f"target: {to}/" + (f" (it is in {to}/ already)" if ended else "")
+                 + ("; --wont-do is ignored" if wont_do and to == "done" else ""))
+    fix = [f"on a branch or on {main}: add the section, push, fetch, then check again"]
+    if text is None:
+        raise Blocked(f"no {readme} on {on}", "the plan's note has nowhere to go",
+                      safe=["set the board up on main (the status-board skill)"], options=fix)
+    if not plan_readme.has_section(text, to):
+        raise Blocked(f"no {to} section in {readme} on {on}",
+                      f"{readme} on {on} has no {to} section for the plan's note",
+                      safe=["read the README's headings"], options=fix)
+    plan, drops = moves_to(s, plans, to)
+    stems = {sb.stem(f) for _, f in found}
+    first = blob(g, top, s, f"{plans}/{found[0][0]}/{found[0][1]}")
+    try:
+        new = plan_readme.move_notes(text, stems, to, fallback_note(found, base, first))
+    except ValueError as e:
+        raise Blocked(f"could not plan the {readme} edit", str(e),
+                      safe=[f"read {readme} on {on} around the plan's notes"],
+                      options=["move the note by hand on main, then check again"]) from None
+    target = {src: None for _, src, _ in plan} | {p: None for p in drops}
+    target |= {dst: blob(g, top, s, src) for how, src, dst in plan if how == "mv"}
+    target[readme] = new
+    w = workspace(g, facts, s, top, plans, base, target)
+
+    change = bool(plan or drops or new != text)
+    steps = enter_steps(s, w, top, change)
+    if change:
+        touched = []
+        steps += move_steps(w["work"], s["tree"], plan, drops, touched)
+        if new != text:
+            review = (f"re-read the {to} section and the next list: the note for {base} "
+                      f"should describe it as {'done' if to == 'done' else 'dropped'}, "
+                      f"and no item for it should be left in the next list")
+            if not plan_readme.find_notes(text, stems):
+                review += "; the note was made up from the plan's title — reword it if needed"
+                for stem in sorted(mentions(text, stems)):
+                    review += f"; {stem} is also named outside a list note — check that entry"
+            steps += hunks(w["work"], readme, text, new, review)
+            steps.append(run_step(w["work"], ["git", "add", "--", readme], f"{readme} staged"))
+            touched.append(readme)
+        word = "done" if to == "done" else "won't do"
+        steps += publish_steps(s, w, top, f"Plans: {base} {word}", touched)
+    steps += leave_steps(s, w, top, change)
+    if not steps:
+        facts.append(f"{base} is in {to}/ on {on} with its note and no tracker")
+        return "done", []
+    return "plan", steps
 
 
 def recheck(args):
@@ -521,7 +675,9 @@ def render(res):
         out.append(STEPS_HEAD)
     for n, s in enumerate(res["steps"], 1):
         if s["kind"] == "edit":
-            out.append(f"{n}. in {s['cwd']} · edit {s['path']} lines {s['start']}–{s['end']}")
+            where = (f"insert before line {s['start']}" if s["end"] == s["start"] - 1
+                     else f"lines {s['start']}–{s['end']}")
+            out.append(f"{n}. in {s['cwd']} · edit {s['path']} {where}")
             out += [f"     {ln}" for ln in s["context"]["before"]]
             out += [f"   - {ln}" for ln in s["old"]] + [f"   + {ln}" for ln in s["new"]]
             out += [f"     {ln}" for ln in s["context"]["after"]]
@@ -569,12 +725,16 @@ def main():
     facts, outcome, steps, blocked, code = [], "blocked", [], None, 5
     root = args.root or "."
     try:
-        top = g(root, "rev-parse", "--show-toplevel")
-        if top is None:
-            raise Blocked("not a git checkout", f"{os.path.abspath(root)} is not inside "
-                          f"a git repository (or git is older than 2.44)",
-                          options=["run it inside the project", "update git"])
-        top = os.path.realpath(top)
+        p = g.run(root, "rev-parse", "--show-toplevel")
+        if p.returncode:
+            raise Blocked("not a git checkout",
+                          f"git rev-parse --show-toplevel in {os.path.abspath(root)} said: "
+                          f"{(p.stderr or p.stdout).strip() or 'nothing'}",
+                          safe=["git --version (2.44 or newer is needed)"],
+                          options=["run it inside the project", "update git",
+                                   "for a \"dubious ownership\" message: the user decides "
+                                   "on git's safe.directory"])
+        top = os.path.realpath(p.stdout.strip())
         board = os.path.realpath(sb.find_root(root))
         plans = os.path.relpath(os.path.join(board, "plans"), top).replace(os.sep, "/")
         if plans.startswith(".."):
