@@ -2265,6 +2265,7 @@ After the merge:
    the re-check says Nothing to do.
 3. Add to `~/.claude/CLAUDE.md`, under the plans-location bullet: "Before executing a plan,
    start it with `/status-board:start`. Don't move a plan to `done/` on its branch: after
-   merging the branch, run `/status-board:finish`, which moves it on `main`. Plans-only commits
-   go straight to `main` and are pushed."
+   merging the branch, run `/status-board:finish`, which moves it on `main`. Only mark a plan
+   done when every PR for it is merged, or I say so. Plans-only commits go straight to `main`
+   and are pushed." (the same text as the README's suggested rule)
 4. The board (`status_board.py --scope full`) shows both files in "Last 2 done", no drift.
