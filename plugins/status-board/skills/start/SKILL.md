@@ -38,7 +38,8 @@ branch with another name.
    python3 "<skill-dir>/../status-board/scripts/plan_flow.py" check start <plan>
    ```
 
-   `command not found` → retry once with `python`. `--json` prints the same
+   `command not found` → retry once with `python`, and use `python` for the
+   rechecks too (they are printed with `python3`). `--json` prints the same
    as one object, if that is easier to follow; the text form is enough.
 
 ## 3. Act on its first line
@@ -62,9 +63,10 @@ branch with another name.
 `[status-board] still waiting on …` lines on stderr are progress, not output.
 A command the check had to stop comes back as ``BLOCKED: `<command>` did
 not answer`` — say which command and the likely causes (another git
-holding the repo's lock, a filesystem monitor, a very large untracked tree);
-prefixing `STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit
-(default 60).
+holding the repo's lock, a filesystem monitor, a very large untracked tree).
+To raise the limit (default 60 s), check again with `--timeout S` (and
+`--warn S` for the heartbeat): the rechecks carry both flags on.
+`STATUS_BOARD_KILL_SECS` / `STATUS_BOARD_WARN_SECS` only set the defaults.
 
 ## Carry out the plan
 

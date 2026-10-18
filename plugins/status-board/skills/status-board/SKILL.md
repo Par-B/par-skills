@@ -33,10 +33,11 @@ X plan", use `full` and point the user at the matching row.
 Use it when a Bash shell **and** Python 3 are available. Run it from inside the
 project (the script walks up to the nearest `plans/`, so no `--root`) as a
 **single, plain command**: substitute the **absolute** base directory you were
-told at load time for `<skill-dir>` and write it **literally**. No shell
-variables or `$(...)` — the auto-approve hook matches on the script-path
-**suffix** (`status-board/scripts/status_board.py`), so a `${VAR}` would obscure
-it and re-trigger a prompt:
+told at load time for `<skill-dir>` and write it **literally**. The plugin's
+hook approves only one plain call of this install's own script: bare
+`python3`/`python`, an absolute path that resolves to it, plain characters (no
+`$`, braces or globs), optionally prefixed by `STATUS_BOARD_*_SECS=<n>`.
+Anything else prompts:
 
 ```bash
 python3 "<skill-dir>/scripts/status_board.py" --scope full

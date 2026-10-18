@@ -113,10 +113,12 @@ else in a temporary worktree of `origin/main`, so yours is left alone; a plan
 written only on its branch is brought over from there), then **the branch**
 (default: the plan's slug without date and suffix; `--branch NAME` to choose),
 made from `origin/main` when missing. An existing branch that lacks `main`'s
-start commit or is behind its own remote gets a **Question** — merge
-`origin/main` into it, fast-forward it to its remote, both, or leave it — and
-the check runs again with `--sync merge|remote|both|none`. Last, after a merge, a copy
-of the plan the branch still keeps outside `active/` is removed there
+latest change to the plan or is behind its own remote gets a **Question** —
+merge `origin/main` into it, fast-forward it to its remote, both, or leave it —
+and the check runs again with `--sync merge|remote|both|none`. Last, after a
+merge, a copy of the plan the branch still keeps outside `active/` (in
+`backlog/`) goes on the branch too: removed when it is the same as the
+`active/` copy the merge brought in, else moved to `active/`, with its note
 (committed, not pushed; left alone if you chose to leave the branch).
 When the branch has no checkout, the closing facts say to make one with your
 worktree tool. Never a rebase, reset, stash or force-push; it stops, with the
@@ -149,9 +151,11 @@ heartbeat is itself a finding — another git holding the repo's lock, a
 filesystem monitor, a very large untracked tree. A stopped command becomes, on
 the board, one drift row `main check | main check skipped: …` (the rest of the
 board is complete) and, in the check, ``BLOCKED: `<command>` did not answer``
-with the facts so far. Prefix `STATUS_BOARD_KILL_SECS=120 ` to raise the limit;
-the check also takes `--warn S`, `--timeout S` and `--trace` (log every command
-with its exit code and time). Steps Claude runs are not wrapped — each carries
+with the facts so far. The variables set the defaults; during a start or
+finish, raise the limit with the check's `--timeout S` (and `--warn S`), which
+the rechecks carry through — a `STATUS_BOARD_KILL_SECS=120 ` prefix on one
+check is lost on the next. `--trace` logs every command with its exit code and
+time. Steps Claude runs are not wrapped — each carries
 its own time limit for Claude's Bash call instead.
 
 To have every plan-running skill use them, add to your global `CLAUDE.md`:
