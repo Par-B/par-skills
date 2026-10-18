@@ -21,8 +21,10 @@ check finish <plan>: after the plan's branch is merged, the plan's files
     trackers gone and its note in that section of plans/README.md, off the
     "next … order" list; one commit, pushed. A gate first: the move is
     planned only when every branch of the plan (the slug's, and each
-    --branch) is shown merged here — its tip is in origin/main, or its
-    upstream is gone after a merge — or with --prs-merged (Claude saw every
+    --branch) is shown merged here, with work after the plan's start (the
+    latest commit made on origin/main that touched it in active/): its tip
+    is past the start and in origin/main, or past the start with its
+    upstream gone after a merge — or with --prs-merged (Claude saw every
     PR merged with gh: a squash merge leaves no trace here) or --confirm
     (the user said the plan is finished). --wont-do needs --confirm. The
     trackers' open tasks are counted in the facts.
@@ -61,9 +63,9 @@ import status_board as sb
 from plan_check import (NEVER, NOT_FOUND, REMOTE, SLOW, TERMINAL, Blocked, Git,
                         ahead_rule, branch_merged, busy_main, changed, enter_steps,
                         fallback_note, find_pair, leave_steps, move_steps, moves_to,
-                        names, plan_base, publish_steps, readme_steps, render, run_step,
-                        survey, task_tally, temp_path, text_of, tree_of, with_note,
-                        workspace)
+                        names, plan_base, plan_started, publish_steps, readme_steps, render,
+                        run_step, survey, task_tally, temp_path, text_of, tree_of,
+                        with_note, workspace)
 
 
 def finish(g, facts, top, plans, base, args):
@@ -123,9 +125,10 @@ def finish_gate(g, facts, top, s, base, args, to, tally):
         facts.append("--prs-merged: Claude confirmed the PRs are merged")
         return
     names_ = list(dict.fromkeys([sb.DATE_RE.sub("", base)] + (args.branch or [])))
+    started = plan_started(g, top, s, s["plans"])
     missing = []
     for name in names_:
-        proof, lack = branch_merged(g, top, s, name)
+        proof, lack = branch_merged(g, top, s, name, started)
         if proof:
             facts.append(f"merged: {proof}")
         else:

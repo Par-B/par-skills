@@ -30,8 +30,14 @@ def _readme_on_main(cwd):
 
 
 def _merged(main, name="thing"):
-    """The plan's branch, merged: it is in origin/main (the finish gate's proof)."""
-    git(main, "branch", name, "origin/main")
+    """The plan's branch with work after the plan's start, merged into main
+    and pushed (the finish gate's proof). `main` must be clean, on main."""
+    git(main, "switch", "-q", "-c", name)
+    repos.write(main, f"work-{name}.txt", "the plan's work\n")
+    repos.commit_all(main, f"work on {name}")
+    git(main, "switch", "-q", "main")
+    git(main, "merge", "-q", "--no-ff", "-m", f"Merge {name}", name)
+    git(main, "push", "-q")
     return main
 
 
@@ -796,6 +802,7 @@ def test_an_unfinished_temp_worktree_add_can_go_with_force(tmp_path):
     _, res = repos.check(FLOW, main, "finish", THING)
     temp = next(s for s in res["steps"] if s.get("argv", [])[1:3] == ["worktree", "add"])["argv"][4]
     git(main, "worktree", "add", "-q", "--no-checkout", "--detach", temp, "origin/main")
+    repos.write(temp, "src.txt", "code\n")          # cut off after writing one file
     rc, res = repos.check(FLOW, main, "finish", THING)
     assert rc == 5 and "unfinished" in res["blocked"]["rule"], res
     assert f"ask the user, then git worktree remove --force {temp}" in " ".join(
@@ -872,6 +879,43 @@ def test_an_unmerged_branch_blocks_the_finish(tmp_path):
     assert "1 commit(s) not in origin/main" in res["blocked"]["why"]
     options = " ".join(res["blocked"]["options"])
     assert "--prs-merged" in options and "--confirm" in options
+
+
+def _started_from_backlog(tmp_path):
+    """THING started on main by the check (phase A), from backlog/."""
+    main = repos.make(tmp_path)
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    return main
+
+
+def test_a_fresh_branch_at_the_start_is_no_proof(tmp_path):
+    main = _started_from_backlog(tmp_path)
+    git(main, "branch", "thing", "origin/main")          # what phase B makes
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and res["blocked"]["rule"] == f"{BASE} isn't proven merged", res
+    assert "no work after the plan's start" in res["blocked"]["why"], res
+    assert not any(f.startswith("merged:") for f in res["facts"])
+
+
+def test_a_stale_same_named_branch_from_before_the_start_is_no_proof(tmp_path):
+    main = _merged(repos.make(tmp_path))                  # old "thing" work, merged
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "doesn't contain the plan's start" in res["blocked"]["why"], res
+
+
+def test_a_stale_branch_with_its_upstream_gone_is_no_proof(tmp_path):
+    main = repos.make(tmp_path)
+    wt = tmp_path / "wt-thing"
+    git(main, "worktree", "add", "-q", "-b", "thing", str(wt), "origin/main")
+    repos.write(wt, "old.txt", "old\n")
+    repos.commit_all(wt, "old work")
+    git(wt, "push", "-q", "-u", "origin", "thing")
+    git(wt, "push", "-q", "origin", "--delete", "thing")
+    git(main, "fetch", "-q", "--prune")
+    repos.execute(repos.check(FLOW, main, "start", THING, "--branch", "other")[1]["steps"])
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "isn't proven merged" in res["blocked"]["rule"], res
 
 
 def test_a_branch_that_exists_nowhere_is_no_proof(tmp_path):
