@@ -165,6 +165,18 @@ flags a plan still active both there and on `main`: "run /status-board:finish". 
 follows the rule itself: its PR leaves it in `active/`, and finish archives it after the
 merge.
 
+**When a plan may be marked done (the owner, 2026-10-17):** only when the user explicitly
+says so, or when every PR for the plan is merged. `check finish` gates the move: without
+`--confirm` (the user's explicit word) or `--prs-merged` (Claude has looked the PRs up with
+`gh` and every one is merged), it plans the move only when every branch of the plan (the
+default name, plus each `--branch`, repeatable) is proven merged into `origin/main` locally
+(its tip is in `origin/main`, or its upstream is gone after a merge); otherwise Blocked, listing
+each branch and what is missing. The plan's tracker is read too: unfinished tasks are a fact
+("3 of 14 tasks not completed"). A PR closed without merging, or still open, is not done:
+ask the user. `--wont-do` needs `--confirm`. Claude never infers `--confirm` from a workflow
+(a merge script, a finishing skill) and never starts finish on its own before the merge is
+confirmed.
+
 ## Result
 
 In progress on branch `status-board-start-and-finish-on-main`.
