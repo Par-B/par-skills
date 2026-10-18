@@ -40,21 +40,26 @@ lists them). Ambiguous → ask. Pass its filename or slug: the pair
 ## 3. Act on its first line
 
 - `PLAN (n steps)` → **Carry out the plan** below. Facts showing the plan
-  still in `backlog/` on `origin/main` (never started) → confirm with the
-  user that it is finished before running the steps.
+  on `origin/main` anywhere but `active/` (`backlog/`, `future-ideas/`:
+  never started) → confirm with the user that it is finished before running
+  the steps.
 - `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
   work around it: never reset, stash, rebase, force-push, drop a commit or
   delete a copy that differs. An option that names such a command is for the
-  user to choose — ask first.
-  Exit 3 → the plan is not on `main`: has its branch been merged? Fetch
-  first. Say so.
-- `NOTHING TO DO` → say the plan is done (or won't do) on `main`.
+  user to choose — ask first. To diagnose before asking, you may run the
+  read-only looks it lists under `Safe` (`git log …`, `git fetch`).
+  Exit 3 → the plan isn't on `origin/main` even after the fetch: has its
+  branch been merged and pushed? Say so.
+- `NOTHING TO DO` → say the plan is done (or won't do) on `main`, and relay
+  the facts that matter (the main checkout left as it was — pull it when
+  ready; local `main` behind).
 
 `[status-board] still waiting on …` lines on stderr are progress, not output.
 A command the check had to stop comes back as ``BLOCKED: `<command>` did
 not answer`` — say which command and the likely causes (another git
-holding the repo's lock, a filesystem monitor, a very large untracked tree); prefixing
-`STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit (default 60).
+holding the repo's lock, a filesystem monitor, a very large untracked tree);
+prefixing `STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit
+(default 60).
 
 ## Carry out the plan
 
@@ -65,28 +70,38 @@ each `in <dir>`, in order:
   Bash call, never chained (`&&`, `;`, pipes), Bash timeout = its limit. Run
   it in its directory: `git -C <dir> <the rest>` for git, an absolute path
   for `mkdir -p`. Compare the result with `expect`.
-- **An edit** (`edit plans/README.md lines a–b`, or `insert before line a`:
-  `-` lines out, `+` lines in, the unmarked lines around them as context) →
-  Read `<dir>/plans/README.md`, then make exactly that change with the Edit
-  tool (the context makes the old text unique). Never touch other lines.
-  Then do what its `then:` says: re-read the section and the plan's note,
-  and reword the note if it no longer fits (e.g. it still says "in
-  progress"). Do this before the `git add` step that follows.
+- **An edit** (`edit <path> lines a–b`, or `insert before line a`: `-` lines
+  out, `+` lines in, the unmarked lines around them as context) → Read
+  `<dir>/<path>`, then make exactly that change with the Edit tool (the
+  context makes the old text unique). Lines come without line endings; the
+  Edit tool keeps the file's own (CRLF too). Touch no other lines, except
+  what the review calls for.
+- **The review** (`then:`, the same on every hunk of a file) → once, after
+  that file's last edit and before the `git add` that follows: re-read the
+  section and the plan's note, and reword the note if it no longer fits
+  (e.g. it still says "in progress"). Keep its leading backticked slug — the
+  recheck finds the note by it.
 - **The recheck** (last) → run it from its directory, as given — same flags.
   `cd` there first if the shell moved.
 
 A step fails (an error, or a result other than `expect`) → stop there. Read
 git's message against the facts, tell the user what happened, then check
 again: the check sees the half-done state and plans from it. Where `expect`
-says what to do on failure (a rejected push), do that.
+says what to do on failure (a rejected push), do that. A commit or push that
+times out is most likely a hook (pre-commit, pre-push, a gpg pinentry) —
+tell the user; rerun with a longer timeout only with their OK. A step the
+harness refuses (e.g. a worktree-isolated session refusing `git -C` into
+another checkout) → stop and tell the user to run the finish from a session
+in the main checkout.
 
-Repeat until `NOTHING TO DO`; still `PLAN` after 4 rounds → stop and report
-the last facts.
+Repeat until `NOTHING TO DO`. Still `PLAN` on the check after your 4th
+carried-out plan → stop and report the last facts.
 
 ## Without Python
 
 The check needs Python 3 and git 2.44 or later. Without them, do it by hand:
-`git fetch origin`; in a checkout of `main` level with `origin/main`, `git mv`
+`git fetch origin`; in a checkout of `main` brought level with
+`git merge --ff-only --no-autostash origin/main`, `git mv`
 any of the plan's files not yet in `plans/done/` there, `git rm` its
 `*.tasks.json`, move its note in `plans/README.md` to the top of the done
 section and off the next list, commit just those paths as

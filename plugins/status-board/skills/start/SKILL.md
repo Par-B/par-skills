@@ -50,7 +50,8 @@ branch with another name.
 - `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
   work around it: never reset, stash, rebase, force-push, drop a commit or
   delete a copy that differs. An option that names such a command is for the
-  user to choose — ask first.
+  user to choose — ask first. To diagnose before asking, you may run the
+  read-only looks it lists under `Safe` (`git log …`, `git fetch`).
   Exit 3 → no such plan here or on `main`; say so and show the board.
 - `NOTHING TO DO` → relay the facts that matter. A fact `make the worktree of
   the existing branch <name> with your worktree tool` → do it now, checking
@@ -61,8 +62,9 @@ branch with another name.
 `[status-board] still waiting on …` lines on stderr are progress, not output.
 A command the check had to stop comes back as ``BLOCKED: `<command>` did
 not answer`` — say which command and the likely causes (another git
-holding the repo's lock, a filesystem monitor, a very large untracked tree); prefixing
-`STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit (default 60).
+holding the repo's lock, a filesystem monitor, a very large untracked tree);
+prefixing `STATUS_BOARD_KILL_SECS=<n> ` to the check raises the limit
+(default 60).
 
 ## Carry out the plan
 
@@ -73,24 +75,34 @@ each `in <dir>`, in order:
   Bash call, never chained (`&&`, `;`, pipes), Bash timeout = its limit. Run
   it in its directory: `git -C <dir> <the rest>` for git, an absolute path
   for `mkdir -p`. Compare the result with `expect`.
-- **An edit** (`edit plans/README.md lines a–b`, or `insert before line a`:
-  `-` lines out, `+` lines in, the unmarked lines around them as context) →
-  Read `<dir>/plans/README.md`, then make exactly that change with the Edit
-  tool (the context makes the old text unique). Never touch other lines.
-  Then do what its `then:` says: re-read the section and the plan's note,
-  and reword the note if it no longer fits the plan's new state (e.g. it
-  still says "not started"). Do this before the `git add` step that follows.
+- **An edit** (`edit <path> lines a–b`, or `insert before line a`: `-` lines
+  out, `+` lines in, the unmarked lines around them as context) → Read
+  `<dir>/<path>`, then make exactly that change with the Edit tool (the
+  context makes the old text unique). Lines come without line endings; the
+  Edit tool keeps the file's own (CRLF too). Touch no other lines, except
+  what the review calls for.
+- **The review** (`then:`, the same on every hunk of a file) → once, after
+  that file's last edit and before the `git add` that follows: re-read the
+  section and the plan's note, and reword the note if it no longer fits the
+  plan's new state (e.g. it still says "not started"). Keep its leading
+  backticked slug — the recheck finds the note by it.
 - **The recheck** (last) → run it from its directory, as given — same flags,
   `--sync` included. `cd` there first if the shell moved.
 
 A step fails (an error, or a result other than `expect`) → stop there. Read
 git's message against the facts, tell the user what happened, then check
 again: the check sees the half-done state and plans from it. Where `expect`
-says what to do on failure (a rejected push, a merge conflict), do that.
+says what to do on failure (a rejected push, a merge conflict), do that. A
+commit or push that times out is most likely a hook (pre-commit, pre-push, a
+gpg pinentry) — tell the user; rerun with a longer timeout only with their
+OK. A step the harness refuses (e.g. a worktree-isolated session refusing
+`git -C` into another checkout) → stop and tell the user to run the start
+from a session in the main checkout.
 
-Repeat until `NOTHING TO DO`. A start takes up to 3–4 rounds (main, the
-branch, the branch's copy); still `PLAN` after 4 → stop and report the last
-facts.
+Repeat until `NOTHING TO DO`. Count the plans you carry out (a `QUESTION`
+doesn't count): a plan written on its branch runs PLAN, QUESTION, PLAN, PLAN,
+NOTHING TO DO. Still `PLAN` on the check after your 4th carried-out plan →
+stop and report the last facts.
 
 ## Without Python
 
@@ -100,5 +112,7 @@ temporary `git worktree add --detach <dir> origin/main` when the main checkout
 is busy), `git mv` the plan's files from `plans/backlog/` to `plans/active/`,
 move its note in `plans/README.md` to the active section and off the next
 list, commit just those paths as `Plans: start <date>-<slug>` and
-`git push origin HEAD:refs/heads/main`; then `git branch <name> origin/main`,
-or ask before merging `origin/main` into an existing branch.
+`git push origin HEAD:refs/heads/main`; then
+`git branch --no-track <name> origin/main`, or ask before merging
+`origin/main` into an existing branch (`git merge --no-autostash origin/main`
+in its checkout).
