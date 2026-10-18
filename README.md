@@ -30,6 +30,8 @@ Update later with `/plugin marketplace update par-plugins`.
 | Plugin | Invoke | What it does |
 |---|---|---|
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, next in order, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
+| `status-board` | `/status-board:start` (or "start the search plan") | Starts a plan on `main`: after a `git fetch`, a read-only check works out what it takes and Claude runs each step itself — move the plan's files from `backlog/` to `active/`, move its README note and take it off the next list, commit just that and push it; then make the plan's branch from that commit, or bring an existing one up to level (merge `main`, fast-forward to its remote, both, or neither — you pick; never a rebase). Leaves the worktree to your worktree tool. |
+| `status-board` | `/status-board:finish` (or "I merged the search branch") | After every PR for a plan is merged, or you say it is finished (the branch never moves it to `done/`): fetches, checks on `origin/main` that the plan is in `done/` (or `wont-do/`) with no `*.tasks.json` tracker and its note under done, and Claude runs the steps that move it there — a plans-only commit, pushed (none when nothing is missing). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
 | `md-optimize` | `/md-optimize:md-optimize` (or "optimize my CLAUDE.md") | Analyzes an AI-instructions file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`, global or project — plus any files it `@imports`) against the **current session** and interactively improves it through four lenses — effectiveness (contradictions, vague/inaccurate rules, gaps the session exposed), token efficiency (verbosity, redundancy, dead rules), cross-file overlap (a project or imported file duplicating/conflicting with a global one), and privacy (secrets, confidential info, and personal names/contact — including your own — flagged by exposure). Also scans a repo for **skill files** (`SKILL.md`) and optimizes chosen ones with a skill-authoring lens (`description`-as-triggers, no `@`-imports, concise body). Proposes changes one at a time; applies only the ones you approve, with a keep/redact/move/delete/acknowledge menu for privacy findings. **Snapshots every run before editing**, so you can undo/revert later ("undo my last md-optimize") and prune old history ("keep the last 10"). Ships snapshot/undo/prune and `@import`-resolver scripts; only its safe commands auto-approve (a scoped hook) — `restore`/`prune` always prompt, and edits are guarded to resolved `.md` files only. |
 
@@ -77,6 +79,116 @@ to add the section — moving an old bold "Next, in this order" list under it if
 there is one. Say yes and that board is done; nothing changes until you do.
 Older installs (0.4.x) still read migrated boards.
 
+### status-board — starting and finishing plans on main (0.7+)
+
+Plans are built on branches, so a plan moved to `active/` on its branch still
+shows as not started on `main` — and on every other branch and computer — until
+the merge. `/status-board:start <plan>` makes the move on `main` instead, as a
+plans-only commit that is pushed, so the plan shows in flight everywhere from
+the moment work begins. A plan's `-design.md`/`-plan.md` pair moves together,
+with its `*.tasks.json` tracker.
+
+**The check reads; Claude runs.** The skill first runs `git fetch origin`
+(its own call), then `plan_flow.py check start <plan>`. The check never
+fetches, pushes or writes: it compares with `origin/main` as last fetched and
+prints **Facts** (main and its remote, ahead/behind, every checkout and what is
+dirty in it, where the plan's files are here and on `origin/main`, the README
+sections, the branch), then one outcome — a **Plan** of numbered steps (each
+with its directory, the exact command, a time limit and what should be true
+after), a **Question**, **Blocked** (the rule that failed, why, what is safe,
+what not to do, the options; exit 5) or **Nothing to do**. `--json` gives the
+same as one object. Claude runs each step itself, one command per Bash call,
+never chained — so your permission prompts and Claude Code's safety evaluator
+see every git command, not just `python3 plan_flow.py …` — and compares the
+result with what was expected. README changes come as exact line edits, which
+Claude makes with its own Edit tool and then reviews: it re-reads the section
+and rewords the note if it no longer fits (a note still saying "not started").
+On a failure it stops, reads git's message against the facts, and checks
+again; the last step is always the check again, and it is done when that says
+nothing to do.
+
+A start goes in phases, one check each: **main** (the move, committed and
+pushed — in the main checkout when it is on `main` and clean where it matters,
+else in a temporary worktree of `origin/main`, so yours is left alone; a plan
+written only on its branch is brought over from there), then **the branch**
+(default: the plan's slug without date and suffix; `--branch NAME` to choose),
+made from `origin/main` when missing. An existing branch that lacks `main`'s
+latest change to the plan or is behind its own remote gets a **Question** —
+merge `origin/main` into it, fast-forward it to its remote, both, or leave it —
+and the check runs again with `--sync merge|remote|both|none`. Last, after a
+merge, a copy of the plan the branch still keeps outside `active/` (in
+`backlog/`) goes on the branch too: removed when it is the same as the
+`active/` copy the merge brought in, else moved to `active/`, with its note
+(committed, not pushed; left alone if you chose to leave the branch).
+When the branch has no checkout, the closing facts say to make one with your
+worktree tool. Never a rebase, reset, stash or force-push; it stops, with the
+facts, when your local `main` has other commits `origin/main` lacks.
+
+A plan is marked done only after the merge: its branch never moves it to
+`done/` (there it stays in `active/`). After the merge, `/status-board:finish
+<plan>` fetches and runs `plan_flow.py check finish <plan>`: it brings your
+local `main` level (a pull request merged on GitHub leaves it behind) and plans
+the move — files to `done/`, trackers removed, the note under done — as one
+pushed plans-only commit. Nothing missing, no commit.
+`--wont-do` files it under won't-do instead. A plan not on `origin/main` exits
+3: has its branch been merged? Fetch first.
+
+A plan may be marked done only when every pull request for it is merged, or
+you say so. Claude looks the plan's PRs up with `gh` (one `gh pr list --head
+<branch>` per branch: the slug's branch by default; `--branch NAME`,
+repeatable, replaces it) and passes `--prs-merged` only when every branch has
+at least one PR and all are merged (no PR found for a branch: it leaves the
+proof to git, or asks you); an open PR, or one closed without merging, means
+it asks you. `--confirm` is your explicit word, never inferred from a
+workflow; `--wont-do` needs it. Without either, the check plans the move only
+when every branch is proven merged locally — its tip holds work after the
+plan's start and is in `origin/main` — and otherwise stops, listing each
+branch and what is missing ("doesn't contain the plan's start", "has no work
+after the plan's start", …). A gone upstream proves nothing (a PR closed
+unmerged loses its branch too), and a squash or rebase merge leaves no trace,
+so those need `--prs-merged` or `--confirm`. When main already has the plan
+in `done/` or `wont-do/`, no proof is needed for what is left (its tracker or
+note). Unfinished tasks in the plan's tracker show as a fact ("3 of 14 tasks
+not completed").
+
+Rendered on a branch or in a worktree, the board also compares with
+`origin/main` (as last fetched; origin/HEAD's branch, else `origin/main`, else
+`origin/master`) and flags under ⚠️ Drift a plan that is active here but still
+in backlog on main (`… — run /status-board:start`). Once the branch's
+upstream is gone it adds a hint for the branch's own plan (its slug is the
+branch's name), still active here and on main: `active here and on main; this
+branch's upstream is gone — if its PR was merged, run /status-board:finish`
+(on an older branch that moved its plan itself: `<state> here, still <state>
+on main; …`). A gone upstream is a hint, not proof — a closed PR's branch is
+gone too — so Claude checks the PR before offering the finish. This
+main check needs **git ≥ 2.44** (it runs `git --no-lazy-fetch`, so a partial
+clone never fetches); on older git, without git or without a remote it is
+skipped. `plan_flow.py check` needs git 2.44 too.
+
+**The watchdog.** Every git command the board's main check and the start/finish
+check run is watched: after `STATUS_BOARD_WARN_SECS` (default 5) a
+``[status-board] still waiting on `<command>` in <dir> (12s)`` line goes to
+stderr, repeated, and at `STATUS_BOARD_KILL_SECS` (default 60) the command is
+stopped with whatever it started (on Windows, the command itself only). Local git should never take that long, so a
+heartbeat is itself a finding — another git holding the repo's lock, a
+filesystem monitor, a very large untracked tree. A stopped command becomes, on
+the board, one drift row `main check | main check skipped: …` (the rest of the
+board is complete) and, in the check, ``BLOCKED: `<command>` did not answer``
+with the facts so far. The variables set the defaults; during a start or
+finish, raise the limit with the check's `--timeout S` (and `--warn S`), which
+the rechecks carry through — a `STATUS_BOARD_KILL_SECS=120 ` prefix on one
+check is lost on the next. `--trace` logs every command with its exit code and
+time. Steps Claude runs are not wrapped — each carries
+its own time limit for Claude's Bash call instead.
+
+To have every plan-running skill use them, add to your global `CLAUDE.md`:
+
+> Before executing a plan, start it with `/status-board:start`. Don't move a
+> plan to `done/` on its branch: after merging the branch, run
+> `/status-board:finish`, which moves it on `main`. Only mark a plan done when
+> every PR for it is merged, or I say so. Plans-only commits go straight to
+> `main` and are pushed.
+
 ### Try it
 
 After installing, just talk to Claude naturally — no slash command needed (these
@@ -86,6 +198,8 @@ phrases trigger the skill), or use the explicit `/plugin:skill` form.
 - "show me the status"
 - "what's next?"
 - "put the search plan next" / "move export above search"
+- "start the search plan"
+- "I merged the search branch — finish it"
 - "show me the future ideas"
 - "what did I finish recently?"
 - *(in a repo with no `plans/` yet)* "show me the status" → it offers to set one up
@@ -156,8 +270,43 @@ script** via a `PreToolUse` hook, so they don't prompt on every run:
 
 | Skill | Auto-approved script | What it touches |
 |---|---|---|
-| `status-board` | `skills/status-board/scripts/status_board.py` | reads your `plans/` dir, prints a table |
+| `status-board` | `skills/status-board/scripts/status_board.py` (any args) and `scripts/plan_flow.py check …`, via `hooks/approve_read_only.py` | reads your `plans/` dir and runs read-only git; prints the board, or the start/finish check's facts and steps |
 | `my-commits` | `skills/my-commits/scripts/my_commits.py` | runs read-only git, prints a table |
+
+`status-board`'s hook delegates to `hooks/approve_read_only.py` (run by
+`python3`, or by `python` where there is no `python3`), which parses the
+command and approves exactly one plain call of **this plugin install's own
+copy** of one of its two read-only scripts: bare, unquoted `python3` or
+`python` (no interpreter by path), an absolute script path that resolves
+(symlinks followed) to the file shipped next to the hook, only the characters
+letters, digits, space and `_ . / \ : = " ' -` (so no chaining, redirection,
+`$` expansion, globs or substitution), optionally prefixed by
+`STATUS_BOARD_WARN_SECS=<n>` / `STATUS_BOARD_KILL_SECS=<n>` (the watchdog's
+timers). `plan_flow.py` is approved only as `plan_flow.py check …`, and never
+with `--root` or a prefix of it (another directory's git config could run
+commands under `git status`). Nothing in the plugin runs a git command that changes
+anything: the fetch, `git mv`, commit, push, branch and merge — and the README
+edits — are steps Claude runs one at a time, and each prompts, or is judged by
+the auto-mode evaluator, as usual.
+
+The hook also approves `check finish --confirm` and `--prs-merged`: the check
+only reads, so they change nothing by themselves. The commit and push that
+follow still prompt (or go to auto mode's evaluator). Nothing but the finish
+skill's rule stops Claude passing `--confirm` itself, so your word is what
+matters: answer "is this plan finished?" only when it is.
+
+Claude runs each of those git steps as `git -C <dir> <the rest>` (a temporary
+worktree is removed mid-plan, and a shell that `cd`s outside the allowed
+directories may be reset). A prefix rule such as `Bash(git push:*)` or
+`Bash(git commit:*)` doesn't match `git -C … push`, so in default mode each
+step prompts, and a deny rule written as `git push*` doesn't fire. Write
+rules as `Bash(git -C * push*)` if you want them to apply to these steps.
+
+Two edges to know: a symlink pointing at the real script is approved too (it
+runs the same file, so harmless unless something swaps the link between the
+check and the run); and in development — the plugin loaded from a clone of
+this repo — the approved scripts are files in your working tree that Claude
+can edit without a prompt, so review changes to them as you would the hook.
 
 `md-optimize` auto-approves too, but **only its safe commands** — because its
 scripts include destructive operations that should always stop for confirmation.
@@ -183,12 +332,15 @@ What this means:
 - **No per-run prompt for the safe commands.** Your consent is the **plugin
   install / trust step** — installing and trusting a plugin accepts that its
   bundled hook runs.
-- **Scope is tight.** `status-board`/`my-commits` hooks auto-approve *only* their
-  own read-only script; `md-optimize`'s hook auto-approves *only* its safe
+- **Scope is tight.** `my-commits`' hook auto-approves *only* its own read-only
+  script, `status-board`'s *only* its two read-only scripts (`plan_flow.py`
+  only as `check`); `md-optimize`'s hook auto-approves *only* its safe
   subcommands (verified by `shlex` parsing, not a substring match).
 - **Destructive actions still prompt.** `status-board`'s `plans/` bootstrap
   (`mkdir`/`touch`/`cp`) and its `plans/README.md` edits (the pre-0.5
-  migration, reordering the Next list) are not auto-approved by its hook;
+  migration, reordering the Next list) are not auto-approved by its hook, nor
+  is any step of a start or finish (fetch, `git mv`, commit, push, branch,
+  merge, README edits) — the check only prints them;
   `my-commits` never writes; and
   `md-optimize`'s file-overwriting `restore` and snapshot-deleting `prune` always
   ask.
@@ -205,11 +357,53 @@ scripts (only its safe commands auto-approve — see above) plus the gating hook
 all are stdlib-only. What each touches:
 
 **`status-board` — `status_board.py`**
-- Standard library only: `argparse`, `os`, `re`, `sys`. No third-party packages.
-- Read-only: reads `plans/`, prints a table; never writes, deletes, shells out,
-  `eval`/`exec`s, or networks. (The separate `plans/` bootstrap that creates files
-  is plain `mkdir`/`cp`, and the migration and reordering edit `plans/README.md`
-  with the agent's own tools; the plugin's hook auto-approves none of them.)
+- Standard library only: `argparse`, `os`, `re`, `shlex`, `signal`,
+  `subprocess`, `sys`, `time`. No third-party packages.
+- Read-only: reads `plans/`, prints a table; never writes, deletes,
+  `eval`/`exec`s, or networks. Off `main` it runs **read-only git**
+  (`symbolic-ref`, `rev-parse --verify`, `ls-tree`, `for-each-ref`, all with
+  `--no-lazy-fetch`) to compare with `origin/main`; it never fetches, pushes,
+  commits or checks out. (The separate `plans/` bootstrap that creates files
+  is plain `mkdir`/`cp`, and the migration and reordering edit
+  `plans/README.md` with the agent's own tools; the plugin's hook auto-approves
+  none of them.)
+- Every subprocess goes through one function, `run_watched`: a list argv, never
+  a shell; no stdin and no prompts (`GIT_TERMINAL_PROMPT=0`),
+  `GIT_OPTIONAL_LOCKS=0`, and an inherited `GIT_DIR`/`GIT_WORK_TREE`/… dropped
+  so git always reads the repo it is pointed at. Its watchdog prints a
+  "still waiting" line to stderr after `STATUS_BOARD_WARN_SECS` (default 5)
+  and kills the command at `STATUS_BOARD_KILL_SECS` (default 60) — with its
+  whole process group on POSIX, the command itself on Windows. Only positive
+  finite numbers are taken from those variables; they change timing, never
+  what runs.
+
+**`status-board` — `plan_flow.py` + `plan_check.py` + `plan_readme.py`** (start/finish; `plan_flow.py check` auto-approves)
+- Standard library only: `plan_flow.py` `argparse`, `json`, `os`, `shlex`,
+  `sys`; `plan_check.py` `difflib`, `hashlib`, `os`, `shlex`, `tempfile`,
+  `time`; `plan_readme.py` `re` (pure text editing) — plus each other and
+  `status_board.py`. None imports `subprocess`: every git command runs through
+  `status_board.py`'s `run_watched`, under the watchdog.
+- **Read-only.** `plan_flow.py` (the only entry point) has one subcommand,
+  `check`. It never fetches, pushes, commits, moves or writes a file; the
+  commands that do are only printed, as steps, for Claude to run. Its git
+  commands are held to an allow-list of exact argument shapes (`rev-parse`,
+  `rev-list`, `status`, `ls-tree`, `log`, `symbolic-ref` with one ref,
+  `cat-file blob`, `check-ref-format --branch`, `worktree list --porcelain`);
+  anything else is refused before it runs.
+- **No program the repo's config names runs:** every git gets
+  `-c core.fsmonitor=false` (no filesystem monitor) and `--no-lazy-fetch`;
+  `git log` always gets `--no-show-signature` (no `gpg.program`) and never a
+  patch, `--ext-diff` or `--textconv`; `cat-file` is only `cat-file blob`.
+  One caveat: clean filters the repo itself configures can still run under
+  `git status`, as with any `git status` you run there.
+- No network, no code execution: files and git objects are read as text.
+
+**`status-board` — `hooks/approve_read_only.py`** (the auto-approval gate)
+- Standard library only: `json`, `os`, `re`, `shlex`, `sys`.
+- Reads the pending Bash command on stdin and prints an `allow` decision *only*
+  for one plain call of this plugin's own `status_board.py` or
+  `plan_flow.py check` (the rules under Permissions above); prints nothing
+  otherwise, bad input included. Makes no changes itself.
 
 **`my-commits` — `my_commits.py`**
 - Standard library only: `argparse`, `subprocess`, `sys`, `datetime`.
@@ -252,16 +446,22 @@ all are stdlib-only. What each touches:
 
 ```bash
 F=plugins/status-board/skills/status-board/scripts/status_board.py
+# F=plugins/status-board/skills/status-board/scripts/plan_flow.py     (read-only: the start/finish check)
+# F=plugins/status-board/skills/status-board/scripts/plan_check.py    (read-only: the check's git allow-list)
+# F=plugins/status-board/skills/status-board/scripts/plan_readme.py   (pure text: moves a plan's README note)
+# F=plugins/status-board/hooks/approve_read_only.py                   (auto-approval gate; decides only)
 # F=plugins/my-commits/skills/my-commits/scripts/my_commits.py
 # F=plugins/md-optimize/skills/md-optimize/scripts/md_optimize_history.py   (writes: snapshot/restore/prune)
 # F=plugins/md-optimize/skills/md-optimize/scripts/md_optimize_scope.py     (read-only: @import resolver)
 # F=plugins/md-optimize/hooks/approve_safe_commands.py                      (auto-approval gate; decides only)
-grep -nE "^(import|from) " "$F"   # status_board: argparse/os/re/sys · my_commits: +subprocess/datetime
-grep -nE "os\.system\(|socket\.|urllib\.|requests\.|eval\(|exec\(|__import__\(|Popen" "$F"  # prints nothing
+grep -nE "^(import|from) " "$F"   # status_board: argparse/os/re/shlex/signal/subprocess/sys/time · my_commits: argparse/subprocess/sys/datetime
+grep -nE "os\.system\(|socket\.|urllib\.|requests\.|eval\(|exec\(|__import__\(|shell=True" "$F"  # prints nothing
 ```
 
-(`my-commits` and `md-optimize` import `subprocess` for **read-only git**; that's
-expected. `md-optimize` writes files by design — its whole job is snapshot/restore
+(`status-board`, `my-commits` and `md-optimize` import `subprocess` for
+**read-only git**; that's expected. In `status-board` only `status_board.py`
+imports it, and its one `subprocess.Popen` is `run_watched`'s — a list argv, no
+shell; the `plan_*` scripts reach git only through that function. `md-optimize` writes files by design — its whole job is snapshot/restore
 — so unlike the read-only pair it will show `open(..., "w"/"b")`; that's the
 backup/restore, scoped to the store and the file you name.)
 
@@ -637,11 +837,18 @@ par-skills/                              marketplace "par-plugins"
 └── plugins/                             one plugin per skill (install à la carte)
     ├── status-board/
     │   ├── .claude-plugin/plugin.json
-    │   ├── hooks/hooks.json             auto-approves its render script
-    │   └── skills/status-board/
-    │       ├── SKILL.md
-    │       ├── scripts/status_board.py  read-only scanner (auto-approved)
-    │       └── references/readme-template.md
+    │   ├── hooks/hooks.json             runs approve_read_only.py on each Bash call
+    │   ├── hooks/approve_read_only.py   auto-approves its two read-only scripts
+    │   └── skills/
+    │       ├── status-board/
+    │       │   ├── SKILL.md
+    │       │   ├── scripts/status_board.py  read-only scanner + watchdog (auto-approved)
+    │       │   ├── scripts/plan_flow.py     start/finish check: facts + steps (auto-approved)
+    │       │   ├── scripts/plan_check.py    the check's read-only git and step building
+    │       │   ├── scripts/plan_readme.py   moves a plan's README note (pure text)
+    │       │   └── references/readme-template.md
+    │       ├── start/SKILL.md           /status-board:start
+    │       └── finish/SKILL.md          /status-board:finish
     ├── my-commits/
     │   ├── .claude-plugin/plugin.json
     │   ├── hooks/hooks.json             auto-approves its git-report script

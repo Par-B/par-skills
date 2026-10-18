@@ -9,7 +9,7 @@ Render a repo's `plans/` directory as a single status-board table, grouped by
 lifecycle state. Prefer the bundled script (fast, one pass); fall back to your
 own tools where it can't run, so this works on Linux, macOS, and Windows. View,
 bootstrap, migrate and reorder the Next list only — never move, rename, or create
-plan files.
+plan files (`/status-board:start` and `/status-board:finish` move them).
 
 ## 1. Pick the scope from the user's phrasing
 
@@ -33,10 +33,11 @@ X plan", use `full` and point the user at the matching row.
 Use it when a Bash shell **and** Python 3 are available. Run it from inside the
 project (the script walks up to the nearest `plans/`, so no `--root`) as a
 **single, plain command**: substitute the **absolute** base directory you were
-told at load time for `<skill-dir>` and write it **literally**. No shell
-variables or `$(...)` — the auto-approve hook matches on the script-path
-**suffix** (`status-board/scripts/status_board.py`), so a `${VAR}` would obscure
-it and re-trigger a prompt:
+told at load time for `<skill-dir>` and write it **literally**. The plugin's
+hook approves only one plain call of this install's own script: bare
+`python3`/`python`, an absolute path that resolves to it, plain characters (no
+`$`, braces or globs), optionally prefixed by `STATUS_BOARD_*_SECS=<n>`.
+Anything else prompts:
 
 ```bash
 python3 "<skill-dir>/scripts/status_board.py" --scope full
@@ -49,6 +50,18 @@ Read its output:
 - `NO_BOARD` (exit 3) → go to **Bootstrap**.
 - A table whose **⚠️ Drift** has `plans/README.md` migration rows → relay it
   verbatim, then go to **Migrate (pre-0.5 board)**.
+- A table whose **⚠️ Drift** has rows ending `run /status-board:start` or
+  `run /status-board:finish` → relay it verbatim, then offer once to run that
+  skill for those plans. A finish row is a hint (`if its PR was merged`):
+  before offering, check the PR as finish's step 2 does.
+- A **⚠️ Drift** row `main check | main check skipped: …` → a git command of
+  the main check (below) ran past its limit and was stopped; the rest of the
+  board is complete. Relay it, and say the likely causes (another git holding
+  the repo's lock, a filesystem monitor, a very large tree);
+  `STATUS_BOARD_KILL_SECS=<n> ` in front of the command raises the limit
+  (default 60).
+- `[status-board] still waiting on …` lines (stderr) are progress, not part of
+  the table: don't relay them as output.
 - `command not found` → retry once with `python` instead of `python3`; if that
   also fails, use the **Portable fallback** below.
 
@@ -120,6 +133,27 @@ absent, everything behaves exactly as a single-file board.
   A next-order entry matching no plan file in any state → `in next-order list,
   no file`; these rows come after the undocumented and stale rows, in list
   order. A slug in that list counts as documented.
+  Off `main` (another branch or a worktree), the script also compares with
+  `origin/main` as last fetched (origin/HEAD's branch; unset → `origin/main`,
+  else `origin/master`) — read-only, never fetching: it runs `git
+  --no-lazy-fetch`, so it needs git 2.44 or later and is skipped on older git,
+  without git or a remote, and by the portable fallback. A plan in `active/`
+  here that is still in `backlog/` on main → `active here, still in backlog on
+  main — run /status-board:start`. Once the branch's upstream is gone (after
+  `git fetch --prune`; a hint, not proof: a PR closed unmerged loses its
+  branch too), the branch's own plan (its slug is the branch's name) still
+  in `active/` here and on main → `active here and on main; this branch's
+  upstream is gone — if its PR was merged, run /status-board:finish`; and,
+  on an older branch that moved its plan itself, a plan in
+  `done/`/`wont-do/` here that is still `active`/`backlog` on main →
+  `<state> here, still <state> on main; this branch's upstream is gone — if
+  its PR was merged, run /status-board:finish`.
+  These rows come next. Each git command of this check runs under a watchdog
+  (`STATUS_BOARD_WARN_SECS`, default 5, for a `[status-board] still waiting
+  on …` line on stderr; `STATUS_BOARD_KILL_SECS`, default 60, to stop it); a
+  stopped command replaces these rows with one `main check | main check
+  skipped: <command> … was stopped` row (the script only; the fallback has no
+  main check).
   Migration rows, named `plans/README.md`, come last: no `next … order`
   heading → `no "next — in order" section (pre-0.5 board) — migrate`; each
   old-style list (a non-list line starting in bold whose bold text holds "next"
@@ -227,12 +261,14 @@ approval; don't ask again.
    it). Renumber from 1; replace or drop a `*(none)*` line.
 4. Re-render with `--scope next` and relay the table verbatim.
 
-Never move plan files here: starting a plan is the user's job (or their
-plan-running tools'). A started plan leaves the section by itself.
+Never move plan files here: `/status-board:start` starts a plan. A started plan
+leaves the section by itself.
 
 ## Out of scope
 
 View, bootstrap, migrate and reorder only. Migration edits only `plans/README.md`,
 and only after explicit approval; reordering edits only the Next list, on the
-user's request. Do NOT move plans between states, rename them, or
-create individual plan files — that is the user's job.
+user's request. Do NOT move plans between states, rename them, or create
+individual plan files here — starting and finishing a plan are
+`/status-board:start` and `/status-board:finish`; writing plans is the user's
+job.

@@ -6,8 +6,10 @@ the source of truth; descriptions are enriched from plans/README.md notes (and,
 for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
 to each plan file's title. Drift between folders and README is flagged, as
 are pre-0.5 boards (no "next — in order" heading, or an old bold "next … order"
-list) so the skill can offer migration. An optional "next — in order" list in
-README.md becomes a "Not started: next, in order" section drawn from backlog/.
+list) so the skill can offer migration. Rendered off the main branch, it also
+compares plans/ with origin/main (read-only git) and flags a start or finish
+missed there. An optional "next — in order" list in README.md becomes a
+"Not started: next, in order" section drawn from backlog/.
 
 Two-tier archive: README.md is the CURRENT board (active/backlog/future-ideas +
 recently-done for the current+previous release). Older done/wont-do descriptions
@@ -19,25 +21,48 @@ Usage:  status_board.py [--root DIR]
 Exit codes: 0 = board rendered, 3 = no board found (caller should offer bootstrap).
 
 Security properties (for auditors — each is verifiable against the code below):
-  * Standard library only: imports argparse, os, re, sys. No third-party
-    packages, no dynamic imports.
+  * Standard library only: imports argparse, os, re, shlex, signal,
+    subprocess, sys, time. No third-party packages, no dynamic imports.
+  * Every subprocess goes through run_watched: a list argv, never a shell; no
+    stdin and no prompts (GIT_TERMINAL_PROMPT=0); GIT_OPTIONAL_LOCKS=0; an
+    inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
+    GIT_COMMON_DIR or GIT_NAMESPACE dropped (REPO_ENV). Its watchdog prints a "still
+    waiting" line to stderr every few seconds (STATUS_BOARD_WARN_SECS,
+    default 5) and kills the command at a hard limit (STATUS_BOARD_KILL_SECS,
+    default 60), or on a Ctrl-C or any error while waiting — on POSIX with
+    its whole process group,
+    on Windows the command itself only (TerminateProcess). Only positive
+    finite numbers are taken from those variables; they change timing only,
+    never what runs.
+  * Read-only git: the only command run is git (see git_out), and only
+    commands that read — symbolic-ref (one argument), rev-parse --verify,
+    ls-tree and for-each-ref — to compare plans/ with the remote's main
+    (main_drift). It never fetches (lazy fetching of a partial clone's missing
+    objects is switched off with --no-lazy-fetch; on git older than 2.44 the
+    check is skipped), pushes, commits or checks out. No git: the check is
+    skipped. A watchdog kill: the check is skipped with a drift row saying so.
   * Read-only: every open() below uses the default read mode (see parse_readme,
     parse_next_order and fallback_desc). The script never writes, creates,
     deletes, or renames anything on disk.
-  * No code execution: no subprocess / os.system / eval / exec / compile /
-    __import__. File contents are read as text and pattern-matched only — never
+  * No code execution: no os.system / eval / exec / compile / __import__, no
+    shell. File contents are read as text and pattern-matched only — never
     interpreted or run.
-  * No network: no sockets, no urllib/http, no outbound calls of any kind.
-  * Bounded I/O: the only inputs are the --root/--scope CLI args and files under
-    <root>/plans/. The only output is the Markdown table (or the "NO_BOARD"
-    sentinel) printed to stdout. Nothing outside <root>/plans/ is read.
+  * No network: no sockets, no urllib/http; git is never asked to fetch or push.
+  * Bounded I/O: the only inputs are the --root/--scope CLI args, files under
+    <root>/plans/ and the repo's git refs. The only output is the Markdown table
+    (or the "NO_BOARD" sentinel) printed to stdout; the watchdog's lines go
+    to stderr.
   * No ReDoS: every regex is a simple linear pattern over single character
     classes; inputs are local files, not attacker-controlled streams.
 """
 import argparse
 import os
 import re
+import shlex
+import signal
+import subprocess
 import sys
+import time
 
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 HEADERS = {
@@ -84,6 +109,117 @@ GENERIC_HEADINGS = {
     "what's needed", "design", "design document", "notes", "details", "status",
 }
 MAX_DESC = 150
+REMOTE_PREFIX = "refs/remotes/origin/"
+WARN_ENV, KILL_ENV = "STATUS_BOARD_WARN_SECS", "STATUS_BOARD_KILL_SECS"
+# inherited variables that would point git at another repo, index or object store
+REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR", "GIT_NAMESPACE")
+WARN_SECS, KILL_SECS = 5.0, 60.0
+
+
+class Watchdog(Exception):
+    """A watched command ran past its hard limit and was stopped."""
+
+    def __init__(self, argv, cwd, secs):
+        super().__init__(f"`{shlex.join(argv)}` in {cwd} did not finish in "
+                         f"{secs:.0f}s and was stopped")
+        self.argv, self.cwd, self.secs = argv, cwd, secs
+
+
+def short_cmd(argv):
+    """`argv` as a shell-quoted line, a long pathspec list after `--` cut to
+    its first entry and a count ("git status -- a …(+2)")."""
+    if "--" in argv:
+        cut = argv.index("--") + 1
+        rest = argv[cut:]
+        if len(rest) > 1:
+            return f"{shlex.join(argv[:cut + 1])} …(+{len(rest) - 1})"
+    return shlex.join(argv)
+
+
+def watch_secs(warn=None, kill=None):
+    """(warn, kill) seconds: the arguments, else the environment, else 5 and 60."""
+    def valid(value):
+        return 0 < value < float("inf")             # also refuses nan
+
+    def pick(given, name, default):
+        if given is not None and valid(given):
+            return given
+        try:
+            value = float(os.environ.get(name, ""))
+        except ValueError:
+            return default
+        return value if valid(value) else default
+    return pick(warn, WARN_ENV, WARN_SECS), pick(kill, KILL_ENV, KILL_SECS)
+
+
+def _stop(p):
+    """Kill a watched command and, on POSIX, whatever it started (its process
+    group); on Windows only the command itself (TerminateProcess)."""
+    try:
+        if os.name == "posix":
+            os.killpg(p.pid, signal.SIGKILL)
+        else:
+            p.kill()
+    except OSError:
+        pass
+    try:
+        p.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        # A grandchild that left the group still holds the pipes.
+        for pipe in (p.stdout, p.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass
+        try:
+            p.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+
+def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
+    """Run `argv` in `cwd` (no shell, no stdin, no prompts) under a watchdog.
+
+    After `warn` seconds, and every `warn` seconds after, a line on `log`
+    (stderr) names the command still running (in short_cmd's form); at `kill`
+    seconds it is stopped and Watchdog is raised, its message naming the
+    whole command. Any other exception while waiting (a Ctrl-C, which
+    the command's own session never sees) stops it too. With `trace`, every
+    command is logged with its exit code and time. Returns a CompletedProcess;
+    OSError (no such program) propagates."""
+    warn, kill = watch_secs(warn, kill)
+    log = log or sys.stderr
+    env = {k: v for k, v in os.environ.items() if k not in REPO_ENV}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    group = ({"start_new_session": True} if os.name == "posix"
+             else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP})
+    start = time.monotonic()
+    p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", **group)
+    try:
+        while True:
+            left = kill - (time.monotonic() - start)
+            try:
+                out, err = p.communicate(timeout=max(0.01, min(warn, left)))
+                break
+            except subprocess.TimeoutExpired:
+                secs = time.monotonic() - start
+                if secs >= kill:
+                    _stop(p)
+                    raise Watchdog(argv, cwd, secs) from None
+                print(f"[status-board] still waiting on `{short_cmd(argv)}` in {cwd} "
+                      f"({secs:.0f}s)", file=log, flush=True)
+    except Watchdog:
+        raise
+    except BaseException:
+        _stop(p)
+        raise
+    if trace:
+        print(f"[status-board] `{shlex.join(argv)}` in {cwd}: exit {p.returncode}, "
+              f"{time.monotonic() - start:.2f}s", file=log, flush=True)
+    return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 
 def stem(name):
@@ -155,12 +291,7 @@ def parse_readme(path):
         return notes, documented, table
     text = text.replace("\r\n", "\n").replace("\r", " ")
     # Anything mentioned anywhere counts as "documented": .md tokens + backticked slugs.
-    for tok in MD_TOKEN_RE.findall(text):
-        for exp in brace_expand(tok):
-            documented.add(stem(exp))
-    for bt in BACKTICK_RE.findall(text):
-        for exp in brace_expand(bt.strip()):
-            documented.add(stem(exp))
+    documented |= mentioned_stems(text)
     # Table rows define plan entries + their notes (used for stale + descriptions).
     for line in text.splitlines():
         if "|" not in line:
@@ -189,16 +320,39 @@ def parse_readme(path):
     return notes, documented, table
 
 
+def _first_token(text):
+    """The first backticked slug or .md filename/link in `text`, or None."""
+    hits = [m for m in (BACKTICK_RE.search(text), MD_TOKEN_RE.search(text)) if m]
+    if not hits:
+        return None
+    m = min(hits, key=lambda h: h.start())
+    return (m.group(1) if m.re is BACKTICK_RE else m.group(0)).strip()
+
+
 def item_slug(text):
     """The plan a next-list item names: its first backticked slug or .md
     filename/link, whichever comes first, reduced to a bare stem (a path like
     backlog/foo.md -> foo). "" when the item names none."""
-    hits = [m for m in (BACKTICK_RE.search(text), MD_TOKEN_RE.search(text)) if m]
-    if not hits:
-        return ""
-    m = min(hits, key=lambda h: h.start())
-    tok = m.group(1) if m.re is BACKTICK_RE else m.group(0)
-    return stem(tok.strip().rsplit("/", 1)[-1])
+    tok = _first_token(text)
+    return stem(tok.rsplit("/", 1)[-1]) if tok else ""
+
+
+def item_slugs(text):
+    """Every plan a list item names: item_slug's token, with a {a,b} group
+    brace-expanded, each reduced to a bare stem. set() when it names none."""
+    tok = _first_token(text)
+    return {stem(t.rsplit("/", 1)[-1]) for t in brace_expand(tok)} if tok else set()
+
+
+def mentioned_stems(text):
+    """Every stem `text` names anywhere — .md tokens and backticked slugs,
+    brace-expanded — paths kept (backlog/foo.md -> backlog/foo)."""
+    found = set()
+    for tok in MD_TOKEN_RE.findall(text):
+        found |= {stem(exp) for exp in brace_expand(tok)}
+    for bt in BACKTICK_RE.findall(text):
+        found |= {stem(exp) for exp in brace_expand(bt.strip())}
+    return found
 
 
 def names_next_order(text):
@@ -270,11 +424,16 @@ def fallback_desc(path):
     try:
         # Read-only: read the plan file to pull a human title. Never executed.
         with open(path, encoding="utf-8", errors="replace") as fh:
-            lines = [ln.rstrip() for ln in fh]
+            return title_of(fh.read())
     except OSError:
         return "(unreadable)"
+
+
+def title_of(text):
+    """fallback_desc for a plan's text (plan_flow.py passes a git blob's):
+    its first non-generic heading, else its first prose line."""
     first_prose = None
-    for ln in lines:
+    for ln in text.splitlines():
         s = ln.strip()
         if not s or s == "---":
             continue
@@ -300,6 +459,111 @@ def describe(fname, dir_path, notes):
 def esc(s):
     """Neutralize characters that would break a Markdown table cell."""
     return s.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
+
+
+def git_out(root, *args):
+    """stdout of a read-only git command run in `root`, or None (no git, not a
+    repo, an unknown ref, git older than 2.44…). Used only by main_drift.
+    --no-lazy-fetch stops a partial clone fetching missing objects from its
+    remote. run_watched drops an inherited GIT_DIR and the like, so `-C root`
+    always means root's repo; a hung git raises Watchdog."""
+    try:
+        # absolute: with cwd=root as well, a relative -C would be applied twice
+        root = os.path.abspath(root)
+        p = run_watched(["git", "--no-lazy-fetch", "-C", root, *args], root)
+    except OSError:                                # no git
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def merged(root, head):
+    """Whether branch `head` may be merged: its upstream is gone from the
+    remote (a merged pull request's branch usually is — but so is a closed
+    one's, so the rows built on this are hints). A fresh or detached HEAD
+    never counts, even at or behind main."""
+    return bool(head) and git_out(root, "for-each-ref", "--format=%(upstream:track)",
+                                  f"refs/heads/{head}") == "[gone]"
+
+
+def pick_main_ref(git):
+    """The remote's main branch ref: origin/HEAD, else origin/main, else
+    origin/master (the first that exists), or None. `git(*args)` runs a
+    read-only git command and gives its stdout, or None when it fails — so
+    the board and plan_check.py (each with its own runner) agree."""
+    ref = git("symbolic-ref", "--quiet", REMOTE_PREFIX + "HEAD")
+    if ref:
+        return ref
+    for name in ("main", "master"):
+        if git("rev-parse", "--verify", "--quiet", REMOTE_PREFIX + name) is not None:
+            return REMOTE_PREFIX + name
+    return None
+
+
+def main_ref(root):
+    """pick_main_ref, run in `root`."""
+    return pick_main_ref(lambda *args: git_out(root, *args))
+
+
+def main_drift(root, plans):
+    """[(stem, message)] for a start or finish missed on the main branch, when
+    the board is rendered on another branch or in a worktree: this checkout's
+    plans/ against the remote's main as last fetched (read-only; no fetch).
+    [] with no git or remote, or on the main branch itself. On a branch whose
+    upstream is gone, its own plan (slug = branch name) active here and on
+    main gets a hint row — "if its PR was merged, run finish": a plan is
+    marked done on main after the merge, and a closed PR's branch is gone
+    too. The upstream shows as gone only after `git fetch --prune`; a stale
+    origin/main can give a needless row (finish is idempotent). A git
+    stopped by the watchdog gives one row saying the check was skipped."""
+    try:
+        return _main_drift(root, plans)
+    except Watchdog as e:
+        return [("main check", f"main check skipped: {e}")]
+
+
+def _main_drift(root, plans):
+    ref = main_ref(root)
+    if not ref:
+        return []
+    main = ref[len(REMOTE_PREFIX):]
+    head = git_out(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    listing = None if head == main else git_out(
+        root, "ls-tree", "-r", "-z", "--name-only", ref, "--", "plans/")
+    if not listing:
+        return []
+    on_main = {}
+    for path in listing.split("\0"):
+        parts = path.split("/")
+        if len(parts) == 3 and parts[1] in STATES and parts[2].endswith(".md"):
+            on_main[stem(parts[2])] = parts[1]
+    rows = [(stem(f), f"active here, still in backlog on {main} — run /status-board:start")
+            for f in plan_files(os.path.join(plans, "active"))
+            if on_main.get(stem(f)) == "backlog"]
+    finished = [(stem(f), state, on_main.get(stem(f)))
+                for state in ("done", "wont-do")
+                for f in plan_files(os.path.join(plans, state))
+                if on_main.get(stem(f)) in ("active", "backlog")]
+    # a plan is marked done on main after the merge, so a merged branch
+    # usually still has it active, as main does — but only this branch's own
+    # plan (its slug is the branch's name) is a hint for this branch
+    still = [stem(f) for f in plan_files(os.path.join(plans, "active"))
+             if on_main.get(stem(f)) == "active" and plan_slug(stem(f)) == head]
+    # a gone upstream is a hint, not proof: a PR closed unmerged loses its branch too
+    gone = "this branch's upstream is gone — if its PR was merged, run /status-board:finish"
+    if (finished or still) and merged(root, head):
+        rows += [(s, f"{state} here, still {there} on {main}; {gone}")
+                 for s, state, there in finished]
+        rows += [(s, f"active here and on {main}; {gone}") for s in still]
+    return rows
+
+
+def plan_slug(name):
+    """A plan stem's default branch name: no date, no -design/-plan suffix."""
+    for suffix in ("-design", "-plan"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return DATE_RE.sub("", name)
 
 
 def find_root(start):
@@ -415,6 +679,8 @@ def main():
         # Next-order entries that match no plan in any state (typo or rename).
         # Entries whose plan moved on to active/done/... are skipped silently.
         next_missing = [s for s in (next_order or []) if s not in on_disk]
+        # A start or finish missed on main (only off main, only with git).
+        missed = main_drift(root, plans)
         # Migration: a pre-0.5 board has no "next — in order" heading and may
         # still hold its order as a bold line + list. The skill offers to migrate.
         migrate = []
@@ -423,7 +689,7 @@ def main():
         for n in legacy_next:
             migrate.append(
                 f'old-style next list at line {n} — move under "next — in order"')
-        if undocumented or stale or next_missing or migrate:
+        if undocumented or stale or next_missing or missed or migrate:
             rows.append("| **⚠️ Drift** | |")
             for s in undocumented:
                 rows.append(f"| {esc(s)} | undocumented (in folder, not in README) |")
@@ -431,6 +697,8 @@ def main():
                 rows.append(f"| {esc(s)} | stale (in README, no file) |")
             for s in next_missing:
                 rows.append(f"| {esc(s)} | in next-order list, no file |")
+            for s, msg in missed:
+                rows.append(f"| {esc(s)} | {esc(msg)} |")
             for msg in migrate:
                 rows.append(f"| plans/README.md | {esc(msg)} |")
 
