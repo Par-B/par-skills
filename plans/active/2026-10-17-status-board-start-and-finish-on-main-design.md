@@ -113,6 +113,47 @@ Outside the plugin, once it is installed:
 - This plan itself was started by hand the same way (moved to `active/` on `main`, pushed,
   branch made from that commit), since `start` is what it builds.
 
+## Revised during the build (the owner, 2026-10-17)
+
+The first build had `plan_flow.py start/finish` run git itself (commit, push, merge). The
+owner changed that: **the script finds the path and the outcome; Claude runs it.**
+
+- **Why:** Claude's safety evaluator judges each git command in context, but sees only
+  `python3 plan_flow.py …` when a script runs them; Claude reads git's own errors and can
+  diagnose them; and the plugin's rule so far is "scripts read, the agent writes".
+- **`plan_flow.py check start|finish <plan>` reads only** (auto-approvable). It prints
+  **Facts** (main and its remote, ahead/behind, every checkout with its branch and dirty
+  paths, where the plan's files are here and on `origin/main`, the README sections and
+  notes, the branch and where it is checked out) and then one of: **Plan** (numbered steps,
+  each with its directory, the exact command, a time limit and what should be true after),
+  **Question** (a choice for the user, then check again with the answer), **Blocked** (the
+  rule that failed, why, the facts behind it, what is safe, what not to do, the options),
+  or **Nothing to do**. `--json` gives the same as data.
+- **Claude runs each step alone** (one command per Bash call, never chained, with the
+  step's time limit), compares the result with what was expected, and on an error
+  diagnoses it from the facts and git's message. It ends by running the check again: done
+  means "nothing to do". A start runs in phases (main first, then the branch), each phase
+  one check.
+- **README edits** are exact line edits (old and new lines, with context); Claude makes
+  them with its own Edit tool, then re-reads the section and the note and rewords the note
+  if it no longer fits the plan's new state (e.g. "not started" once active); the closing
+  check catches anything structural.
+- **Fetch:** `/status-board:start` and `/status-board:finish` begin with `git fetch`
+  (Claude runs it). When the plan's branch exists and is behind `main` or behind its own
+  remote, the check asks whether to bring it up to level (merge `main`, fast-forward to the
+  remote, both, or leave it); the user picks.
+- **Watchdog:** every command the check runs (git or anything else) runs under a watchdog:
+  a heartbeat line on stderr ("still waiting on `<command>` in `<dir>` (12 s)") after a
+  warning time, and a kill after a hard limit, which becomes Blocked with the command, its
+  directory, the time and the facts gathered so far. The times come from
+  `STATUS_BOARD_WARN_SECS` (default 5) and `STATUS_BOARD_KILL_SECS` (default 60), or
+  `--warn` / `--timeout`; `--trace` logs every command with its time. The check never uses
+  the network and runs nothing that can prompt (no stdin, `GIT_TERMINAL_PROMPT=0`,
+  `--no-lazy-fetch`, `GIT_OPTIONAL_LOCKS=0`), so any heartbeat is itself a finding. The
+  board's main check uses the same watchdog. Steps Claude runs are not wrapped (the
+  evaluator and permission rules must see the real command); each carries a time limit
+  for Claude's Bash call instead.
+
 ## Result
 
 In progress on branch `status-board-start-and-finish-on-main`.

@@ -1812,3 +1812,438 @@ git commit -m "status-board 0.7.0: document start, finish and the main check"
 - [ ] **Step 3:** In the main checkout: `python3 plugins/status-board/skills/status-board/scripts/plan_flow.py finish 2026-10-17-status-board-start-and-finish-on-main` → expect `nothing to put right` (the branch did the move) or a pushed fix.
 - [ ] **Step 4:** Add the rule to `~/.claude/CLAUDE.md` directly under the bullet that starts `- **CRITICAL — overrides all skills/plugins:** Store ALL planning artifacts`.
 - [ ] **Step 5:** Render the board and check the acceptance criteria.
+
+---
+
+## Revision 2 (2026-10-17): a read-only check; Claude runs git
+
+**Status of the original tasks when this was written:** Tasks 1, 2 and 4 are done and reviewed
+(commits aa211b3 … f5cc298, 83 tests). Task 3 (`finish`, b8dbc67) and Task 5 (skills, c951426)
+were built on the first design and not reviewed; both are **superseded** by the tasks below.
+Task 6 is replaced by R6 and Task 7 by R7.
+
+**User decisions (2026-10-17, during the build)** — recorded in the design under "Revised
+during the build":
+- "you find the path and the outcome but hand to claude to execute it" — `plan_flow.py` stops
+  running git commands that change anything; `check start|finish` reads only and prints Facts
+  and a Plan, Question, Blocked or Nothing to do. When it can't compute a plan it must give
+  rich context so Claude can diagnose.
+- README edits: Claude makes the line edit, then checks the entry and the surrounding content
+  for semantic correctness.
+- Watchdog on every command the script runs (git or not): print that it isn't responding and
+  which command; times overridable from outside ("set the watchdog timer as an external
+  variable"); plus the proposal's `--trace` and "no network in the check".
+- "start plan should probably start with a fetch and a question if we should bring the
+  worktree or the branch up to level with main or remote if its behind. user can pick".
+
+**Unchanged:** the plans-only rule, the pair rule, the branch-name default, "branch only" (no
+worktree folder for the branch), never stash/reset/rebase/force-push or switch another
+checkout's branch, never delete or push uncommitted content, `plan_readme.py` (done), the
+board's main check (done; R1 adds the watchdog to it).
+
+**Reuse:** the decision code in the current `plan_flow.py` (b8dbc67) — `guarded_paths`,
+`dirty`, `unsaved`, `check_drop`'s rules, `find_pair`, `fallback_note`, `mentions`,
+`require_board`, the main-ahead/diverged rule, the MERGE_HEAD rule, `bring_over`'s refusals,
+the verb-aware messages — becomes the check's decision logic. Everything that runs a changing
+git command (`move`, `remove`, `commit`, `push`, `merge_into`, `sync_branch`, `temp_checkout`,
+the `start`/`finish` subcommands) is removed.
+
+### The check's contract
+
+`plan_flow.py check start <plan> [--branch NAME] [--sync merge|remote|both|none]` and
+`plan_flow.py check finish <plan> [--wont-do]`, both with `[--root DIR] [--json] [--warn S]
+[--timeout S] [--trace]`. It reads only: no fetch, no network, no command that writes
+(`git status` runs with `GIT_OPTIONAL_LOCKS=0`). Exit 0 for Plan, Question and Nothing to do;
+2 for no such plan; 5 for Blocked.
+
+`--json` prints one object; the text form renders the same data:
+
+```json
+{
+  "verb": "start", "plan": "2026-10-17-search", "outcome": "plan | question | blocked | done",
+  "facts": ["main: main (origin/main last fetched 3 min ago); local main 0 ahead, 1 behind", "..."],
+  "steps": [
+    {"kind": "run", "cwd": "/abs/dir", "argv": ["git", "merge", "--ff-only", "origin/main"],
+     "limit": 10, "expect": "local main is at origin/main (abc1234)"},
+    {"kind": "edit", "cwd": "/abs/dir", "path": "plans/README.md", "start": 30, "end": 31,
+     "old": ["- `x` — note."], "new": [], "context": ["…3 lines before…", "…3 after…"],
+     "review": "re-read the active and backlog sections: the note for x should describe it as in flight"},
+    {"kind": "recheck", "argv": ["python3", "/abs/plan_flow.py", "check", "start", "x"]}
+  ],
+  "question": {"text": "...", "options": [{"answer": "merge", "label": "...", "means": "..."}]},
+  "blocked": {"rule": "...", "why": "...", "safe": ["..."], "avoid": ["..."], "options": ["..."]}
+}
+```
+
+- **Facts** always come first (also with Blocked): the main branch and remote and how long ago
+  `origin/main` was fetched (`FETCH_HEAD` mtime); local `main` ahead/behind `origin/main`;
+  every checkout (`git worktree list`) with its branch and its dirty paths under the guarded
+  paths and outside `plans/` (counts, first few names); where each of the plan's files is, in
+  this checkout and on `origin/main`; the README sections found and which hold the plan's
+  notes; the target branch, local/remote, ahead/behind its remote and `origin/main`, and where
+  it is checked out; any leftover `status-board-*` temporary worktree.
+- **Steps**: `run` steps are single commands (argv, never a shell string) with the directory,
+  a time limit in seconds (10 for local git, 120 for push) and the expected result; `edit`
+  steps are exact 1-based inclusive line ranges (`end = start - 1` means insert before
+  `start`), without line endings (keep the file's own), listed from the bottom of a file up so
+  numbers stay valid, with `context` and a `review` instruction; the last step is always
+  `recheck` with the same flags. Changes to a file are staged by a `run` step
+  (`git add -- plans/README.md`).
+- **Question**: the text, then options, each with the flag answer and what it means and what
+  stays the same. Claude asks the user, then runs the check again with `--sync <answer>`.
+- **Blocked**: the rule that failed, why, the facts behind it, what is safe to do, what not to
+  do (never reset, stash, rebase, force-push, or delete a differing copy), and the options.
+- **Nothing to do**: Facts plus, for start, "make the worktree of the existing branch
+  <name> with your worktree tool" when the branch has no checkout.
+
+### Start, by phase (each phase is one check; the recheck computes the next)
+
+| Phase | When | Workspace | Steps |
+|---|---|---|---|
+| A — main | the plan is not in `active/` on `origin/main`, or its note is not in the active section, or it is still in the next list | the main checkout when it is on `main`, nothing outside `plans/` is dirty and the guarded paths are clean; else a temporary worktree `<tmpdir>/status-board-<base>-<hash of toplevel>` | [main checkout behind: `git merge --ff-only origin/main`] · [temp: `git worktree add --detach <T> origin/main` run in the toplevel] · [plan not on main: `git checkout <commit> -- <path>` from the branch's committed copy] · `git mv` each file (or `git rm` an identical, clean duplicate) · README edits computed from that workspace's README (for a temp worktree: `origin/main`'s blob) · `git add -- plans/README.md` · `git commit -m "Plans: start <base>" -- <paths>` · `git push origin HEAD:refs/heads/main` (120 s) · [temp: `git worktree remove <T>`; local `main` not checked out and behind: `git branch -f main origin/main`] · recheck |
+| B — branch | main has it; the branch is missing, or exists but lacks `origin/main`'s start commit or is behind its remote | — | branch missing locally and remotely: `git branch <name> origin/main`; only remote: `git branch --track <name> origin/<name>` then as existing. Existing and behind its remote or lacking main: **Question** unless `--sync`: `merge` (merge `origin/main` into it), `remote` (fast-forward to `origin/<name>`), `both` (remote first), `none` (leave it; the board on main shows the plan active). Steps run in the branch's checkout, or a temporary `git worktree add <T> <name>` removed after; `git merge --ff-only origin/<name>` / `git merge --no-edit -m "Merge main into <name>" origin/main` · recheck |
+| C — branch copy | the branch's checkout still has the plan in `backlog/` (its own copy) after the merge | the branch's checkout (clean guarded paths) | `git rm` the identical, clean copy · README edits · `git add` · `git commit -m "Plans: start <base>" -- <paths>` (not pushed; the facts say so) · recheck |
+
+Blocked (with the facts): local `main` ahead of or diverged from `origin/main`; the plan in
+`done/`/`wont-do/` on `origin/main`; `--branch` invalid (`git check-ref-format --branch`) or
+equal to the main branch; `plans/README.md` on `origin/main` missing or without an active
+section; the plan on no branch or only as an uncommitted draft ("commit it on a branch, or
+push it to main"); a copy that would be dropped differs from the kept one or has uncommitted
+changes; the branch's checkout mid-merge (MERGE_HEAD) or diverged from its remote; a leftover
+temporary worktree with changes; `move_notes` raising ValueError; a watchdog kill.
+
+### Finish
+
+Workspace as in phase A. Steps: [main checkout behind: `git merge --ff-only origin/main`] ·
+[temp worktree add] · `git mv` each file not in `done/` (or `wont-do/` with `--wont-do`; a file
+already in a terminal state decides) · `git rm` each `*.tasks.json` of the pair, in any state ·
+README edits (note to the top of the done/wont-do section, off the next list; a made-up note
+when there is none) · `git add` · `git commit -m "Plans: <base> done|won't do" -- <paths>` ·
+`git push origin HEAD:refs/heads/main` · [temp worktree remove; `git branch -f main`] ·
+recheck. Nothing to do when all is in place. Blocked: main ahead/diverged; README without the
+target section; an unsaved copy or tracker that would be dropped; the plan not on
+`origin/main` (exit 2: "has its branch been merged? fetch first"); a watchdog kill.
+
+### Tasks
+
+Dependencies: R1 and R2 are independent; R3 needs R1; R4 needs R3; R5 needs R2 and R4; R6
+needs R5; R7 is after the merge.
+
+#### R1: The watchdog (`run_watched`) in `status_board.py`; the board's main check uses it
+
+**Goal:** One shared `run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None)` in
+`status_board.py` runs a command under a watchdog; the board's `git_out` uses it, and a
+watchdog kill shows as a drift row instead of a silent skip.
+
+**Files:** Modify `plugins/status-board/skills/status-board/scripts/status_board.py`,
+`tests/test_status_board.py`.
+
+**Acceptance Criteria:**
+- [ ] `run_watched` runs `argv` with no shell, no stdin, env without `GIT_DIR`/`GIT_WORK_TREE`
+  plus `GIT_TERMINAL_PROMPT=0` and `GIT_OPTIONAL_LOCKS=0`; prints `[status-board] still waiting
+  on `<cmd>` in <cwd> (<n>s)` to stderr after `warn` s and every `warn` s after; kills the
+  command and its process group (POSIX: `start_new_session` + `killpg`; Windows: new process
+  group + `kill`) at `kill` s and raises `Watchdog(argv, cwd, secs)`; with `trace` logs every
+  command with exit code and time.
+- [ ] Times: arguments, else `STATUS_BOARD_WARN_SECS` / `STATUS_BOARD_KILL_SECS` (positive
+  numbers; anything else ignored), else 5 and 60.
+- [ ] `git_out` keeps `--no-lazy-fetch` and the read-only command list; on `Watchdog` the main
+  check returns one drift row `| origin/main | main check skipped: <message> |`.
+- [ ] Docstring security bullets updated (subprocess via `run_watched` only, list argv, no
+  shell; the watchdog); every existing test still passes.
+- [ ] Tests (POSIX-only ones `skipif os.name != "posix"`): a fake `git` first on `PATH` that
+  sleeps on `status` makes `run_watched` print the heartbeat and raise `Watchdog` within the
+  kill time (use `warn=0.2, kill=1`); env overrides apply; `trace` logs; the board renders a
+  `main check skipped` row when `ls-tree` hangs (fake git, `STATUS_BOARD_KILL_SECS=1`).
+
+**Verify:** `uvx pytest tests/test_status_board.py -q` → all pass.
+
+**Steps:** write the tests first; then add, after the constants:
+
+```python
+WARN_ENV, KILL_ENV = "STATUS_BOARD_WARN_SECS", "STATUS_BOARD_KILL_SECS"
+WARN_SECS, KILL_SECS = 5.0, 60.0
+
+
+class Watchdog(Exception):
+    """A watched command ran past its hard limit and was stopped."""
+
+    def __init__(self, argv, cwd, secs):
+        super().__init__(f"`{shlex.join(argv)}` in {cwd} did not finish in "
+                         f"{secs:.0f}s and was stopped")
+        self.argv, self.cwd, self.secs = argv, cwd, secs
+
+
+def watch_secs(warn=None, kill=None):
+    """(warn, kill) seconds: the arguments, else the environment, else 5 and 60."""
+    def pick(given, name, default):
+        if given:
+            return given
+        try:
+            value = float(os.environ.get(name, ""))
+        except ValueError:
+            return default
+        return value if value > 0 else default
+    return pick(warn, WARN_ENV, WARN_SECS), pick(kill, KILL_ENV, KILL_SECS)
+
+
+def _stop(p):
+    """Kill a watched command and whatever it started (its process group)."""
+    try:
+        if os.name == "posix":
+            os.killpg(p.pid, signal.SIGKILL)
+        else:
+            p.kill()
+    except OSError:
+        pass
+    try:
+        p.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
+    """Run `argv` in `cwd` (no shell, no stdin, no prompts) under a watchdog.
+
+    After `warn` seconds, and every `warn` seconds after, a line on `log`
+    (stderr) names the command still running; at `kill` seconds it is stopped
+    and Watchdog is raised. With `trace`, every command is logged with its exit
+    code and time. Returns a CompletedProcess; OSError (no such program)
+    propagates."""
+    warn, kill = watch_secs(warn, kill)
+    log = log or sys.stderr
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    group = ({"start_new_session": True} if os.name == "posix"
+             else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP})
+    start = time.monotonic()
+    p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", **group)
+    while True:
+        left = kill - (time.monotonic() - start)
+        try:
+            out, err = p.communicate(timeout=max(0.01, min(warn, left)))
+            break
+        except subprocess.TimeoutExpired:
+            secs = time.monotonic() - start
+            if secs >= kill:
+                _stop(p)
+                raise Watchdog(argv, cwd, secs) from None
+            print(f"[status-board] still waiting on `{shlex.join(argv)}` in {cwd} "
+                  f"({secs:.0f}s)", file=log, flush=True)
+    if trace:
+        print(f"[status-board] `{shlex.join(argv)}` in {cwd}: exit {p.returncode}, "
+              f"{time.monotonic() - start:.2f}s", file=log, flush=True)
+    return subprocess.CompletedProcess(argv, p.returncode, out, err)
+```
+
+(imports: `shlex`, `signal`, `time`). Rewrite `git_out` on top of it (`cwd=root`, keep
+`-C root` and `--no-lazy-fetch`; `OSError` → None; `Watchdog` propagates to `main_drift`,
+which returns the skip row). Commit: "status-board: a watchdog on every command the scripts
+run".
+
+#### R2: Auto-approve only the read-only scripts (hook)
+
+**Goal:** A shlex-parsing hook approves exactly one clean invocation of `status_board.py` (any
+args) or `plan_flow.py check …`, optionally prefixed by `STATUS_BOARD_WARN_SECS=<n>` /
+`STATUS_BOARD_KILL_SECS=<n>`; everything else prompts.
+
+**Files:** Create `plugins/status-board/hooks/approve_read_only.py`,
+`tests/test_status_board_hook.py`; modify `plugins/status-board/hooks/hooks.json` (one command
+hook calling the script, replacing the two `if` globs; description rewritten).
+
+**Acceptance Criteria:**
+- [ ] Approves: `python3 "<abs>/status-board/scripts/status_board.py" --scope full`, `python …`
+  fallback, `STATUS_BOARD_KILL_SECS=120 python3 "<abs>/plan_flow.py" check start x --json`,
+  Windows backslash paths.
+- [ ] Refuses: `plan_flow.py` with no subcommand or any other first argument; any `& | ; < > `
+  `` ` `` `$(` or newline; a leading assignment other than the two names (or a non-number
+  value); other scripts whose name merely contains `status_board`; `python3 -c …`.
+- [ ] Prints the `allow` JSON only when approved; prints nothing (exit 0) otherwise, including
+  on bad JSON input.
+
+**Verify:** `uvx pytest tests/test_status_board_hook.py -q` → all pass.
+
+**Steps:** model it on `plugins/md-optimize/hooks/approve_safe_commands.py` and
+`tests/test_md_optimize_hook.py`:
+
+```python
+SHELL_METACHARS = ("&", "|", ";", "<", ">", "`", "$(", "\n")
+ASSIGN_RE = re.compile(r"^STATUS_BOARD_(WARN|KILL)_SECS=\d+(\.\d+)?$")
+
+
+def decide(command):
+    if not command or any(m in command for m in SHELL_METACHARS):
+        return False
+    try:
+        toks = shlex.split(command)
+    except ValueError:
+        return False
+    while toks and ASSIGN_RE.match(toks[0]):
+        toks = toks[1:]
+    if len(toks) < 2 or toks[0].replace("\\", "/").rsplit("/", 1)[-1] not in ("python", "python3"):
+        return False
+    script = toks[1].replace("\\", "/")
+    if script.endswith("status-board/scripts/status_board.py"):
+        return True
+    if script.endswith("status-board/scripts/plan_flow.py"):
+        return toks[2:3] == ["check"]
+    return False
+```
+
+hooks.json: `{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""}`
+under the `Bash` matcher. Commit: "status-board: the hook approves only the read-only scripts".
+
+#### R3: `plan_flow.py check` — the contract, the facts, and finish
+
+**Goal:** `plan_flow.py` becomes read-only: `check finish` works end to end under the contract
+above, every subprocess goes through `run_watched`, and all git-changing code is removed
+(`check start` returns Blocked "not yet" until R4).
+
+**Files:** Modify `plugins/status-board/skills/status-board/scripts/plan_flow.py` (rewrite),
+`tests/plan_repos.py` (add `check()`, `execute()`, `converge()`), `tests/test_plan_flow.py`
+(rewrite: the start tests leave until R4).
+
+**Acceptance Criteria:**
+- [ ] No subprocess outside `run_watched`; no changing git command anywhere (grep for
+  `"commit"`, `"push"`, `"merge"`, `"mv"`, `"rm"`, `"worktree", "add"` finds them only inside
+  step argv lists).
+- [ ] `--json` matches the contract; the text form shows Facts, then Steps (numbered, with
+  directory, `limit`, the shell-quoted command and `expect`; edits with the line range, old/new
+  and context, and the review), Question or Blocked; outcome on the first line.
+- [ ] Finish, end to end via `converge()` (run `check --json`, `execute()` the steps, repeat,
+  ≤ 4 rounds) — each of the old finish tests' scenarios ends in `done` with the same repo
+  state as before: branch already did the move (no commit, local main caught up); branch
+  missed it (done/, tracker gone, note under done, commit subject `Plans: <base> done`);
+  twice (second round `done`, no commit); `--wont-do`; a dirty tracker in the main checkout
+  (temporary worktree used, the tracker untouched, the note says so); the plan not on main
+  (exit 2); no done section (Blocked).
+- [ ] A watchdog kill (fake git hanging on `status`, `STATUS_BOARD_KILL_SECS=1`) → exit 5,
+  Blocked naming the command and directory, with the facts gathered before it.
+- [ ] Facts include the `origin/main` fetch age and every checkout with its dirty paths.
+
+**Verify:** `uvx pytest tests/test_plan_flow.py tests/test_plan_readme.py tests/test_status_board.py -q` → all pass.
+
+**Steps:** tests first. Test helpers for `tests/plan_repos.py`:
+
+```python
+def check(script, cwd, *args):
+    """(exit code, parsed --json output) of `plan_flow.py check …` run in `cwd`."""
+    rc, out = run(script, cwd, "check", *args, "--json")
+    return rc, json.loads(out[out.index("{"):])
+
+
+def execute(steps):
+    """Carry out a check's steps the way the skill tells Claude to: each run
+    step alone, in its directory, stopping at the first that fails; each edit
+    replaces exactly its old lines. Returns None, or (step, CompletedProcess)
+    for the step that failed."""
+    for step in steps:
+        if step["kind"] == "run":
+            p = subprocess.run(step["argv"], cwd=step["cwd"], capture_output=True,
+                               text=True, encoding="utf-8", env=ENV)
+            if p.returncode:
+                return step, p
+        elif step["kind"] == "edit":
+            path = pathlib.Path(step["cwd"]) / step["path"]
+            raw = path.read_bytes().decode("utf-8")
+            crlf = "\r\n" in raw
+            lines = raw.replace("\r\n", "\n").split("\n")
+            a, b = step["start"] - 1, step["end"]
+            assert lines[a:b] == step["old"], (step, lines[a:b])
+            lines[a:b] = step["new"]
+            text = "\n".join(lines)
+            path.write_bytes((text.replace("\n", "\r\n") if crlf else text).encode("utf-8"))
+    return None
+
+
+def converge(script, cwd, *args, rounds=4):
+    """Check, execute, repeat until the outcome is not "plan"; returns the
+    list of outcomes and the last check's output."""
+    seen = []
+    for _ in range(rounds):
+        rc, res = check(script, cwd, *args)
+        seen.append(res["outcome"])
+        if res["outcome"] != "plan":
+            return seen, rc, res
+        failed = execute(res["steps"])
+        assert failed is None, failed
+    raise AssertionError(f"no convergence: {seen}")
+```
+
+Commit: "status-board: plan_flow check plans a finish; Claude runs it".
+
+#### R4: `check start` — phases A, B, C, the question, and bring-over
+
+**Goal:** `check start` follows the phase table, asks the sync question, and blocks with facts
+on each rule; every old start scenario converges to the same end state as before.
+
+**Files:** Modify `plan_flow.py`, `tests/test_plan_flow.py`.
+
+**Acceptance Criteria:**
+- [ ] Via `converge()`, each old start test's scenario ends in `done` with the same repo state
+  it asserted before (main checkout; worktree while the main checkout is elsewhere; existing
+  branch merged — 2-parent merge, its own commit kept — answering `--sync merge`; plan written
+  on its branch, brought over with `git checkout <commit> -- <path>`; the pair and tracker;
+  busy main checkout left alone; uncommitted README/plan/draft edits never pushed).
+- [ ] Each old Blocked scenario returns Blocked with facts and makes no change: diverged,
+  ahead, done plan, unknown (exit 2), bad branch, `--branch main`, differing copy, mid-merge,
+  no active section, draft not committed.
+- [ ] An existing branch behind its remote and lacking main → Question with `merge`,
+  `remote`, `both`, `none`; each answer converges as described (`none` → done, branch
+  untouched).
+- [ ] A rejected push (pre-receive hook) leaves the steps' failure to Claude: `execute()`
+  returns the push step; the recheck then reports local main ahead, with what to do.
+
+**Verify:** `uvx pytest tests/ -q` → all pass.
+
+Commit: "status-board: plan_flow check plans a start in phases".
+
+#### R5: The skills: fetch, check, carry out, re-check
+
+**Goal:** `/status-board:start` and `/status-board:finish` tell Claude to fetch, run the check,
+ask a Question, carry out each step alone with its limit, make and then review the README
+edits, diagnose a failure from the facts, and re-check until "Nothing to do".
+
+**Files:** Modify `plugins/status-board/skills/start/SKILL.md`,
+`plugins/status-board/skills/finish/SKILL.md`, `plugins/status-board/skills/status-board/SKILL.md`
+(only where it describes start/finish).
+
+**Acceptance Criteria:**
+- [ ] Both: step 1 `git fetch origin` (its own Bash call, limit 120 s; on failure report it,
+  don't go on); then `python3 "<skill-dir>/../status-board/scripts/plan_flow.py" check start|finish <plan>`;
+  re-run with the same flags.
+- [ ] Carrying out: one command per Bash call, never chained, with the step's `limit` as the
+  Bash timeout; compare with `expect`; stop at the first failure and diagnose it from the facts
+  and git's message, then re-check; edits with the Edit tool on exactly the given lines, then
+  re-read the section and the note and reword it if it no longer fits (state the review in the
+  step); at most 4 rounds, else report.
+- [ ] Question: ask the user with the options' meanings, then re-check with `--sync <answer>`.
+- [ ] Blocked: relay the rule, why and options; never reset, stash, rebase, force-push, or
+  delete a differing copy; ask the user.
+- [ ] Watchdog lines (`still waiting on …`) and a watchdog Blocked: say which command is stuck
+  and the likely causes; `STATUS_BOARD_KILL_SECS=<n>` raises the limit.
+- [ ] The finished start says to make the worktree of the existing branch with the worktree
+  tool.
+
+**Verify:** read both skills once start to finish against `check --help` and a real
+`check --json` output on a throwaway repo; `uvx pytest tests/ -q` still passes.
+
+Commit: "status-board: the start and finish skills carry out the check's plan".
+
+#### R6: Docs and version 0.7.0
+
+As Task 6, with these changes: the skills table and the 0.7 section describe the check and
+Claude running the steps (fetch first, the sync question, re-check); Permissions: the hook now
+approves `status_board.py` and `plan_flow.py check` only, by parsing the command, and nothing
+in the plugin runs a git command that changes anything; Security: `plan_flow.py` is read-only
+(its steps are run by Claude), `run_watched` and its environment variables; the audit grep no
+longer lists `Popen` as forbidden (it appears once, in `run_watched`, with a list argv and no
+shell) — check for `shell=True` instead; tests README covers `test_status_board_hook.py`, the
+watchdog tests and the converge-style flow tests; git ≥ 2.44 for the main check.
+
+#### R7: After the merge
+
+As Task 7, with step 3 replaced by: run `/status-board:finish 2026-10-17-status-board-start-and-finish-on-main`
+(fetch, check, carry out, re-check) — expect "Nothing to do" if the branch did the move.
