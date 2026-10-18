@@ -21,16 +21,22 @@ Usage:  status_board.py [--root DIR]
 Exit codes: 0 = board rendered, 3 = no board found (caller should offer bootstrap).
 
 Security properties (for auditors — each is verifiable against the code below):
-  * Standard library only: imports argparse, os, re, subprocess, sys. No
-    third-party packages, no dynamic imports.
-  * Read-only git: the only subprocess is git (see git_out), and only commands
-    that read — symbolic-ref (one argument), rev-parse --verify, ls-tree and
-    for-each-ref — to compare plans/ with the remote's main (main_drift).
-    It never fetches (lazy fetching of a partial clone's missing objects is
-    switched off with --no-lazy-fetch; on git older than 2.44 the check is
-    skipped), pushes, commits or checks out; it never prompts (no stdin,
-    GIT_TERMINAL_PROMPT=0) and each call is bounded by a timeout. An inherited
-    GIT_DIR/GIT_WORK_TREE is ignored. No git: the check is skipped.
+  * Standard library only: imports argparse, os, re, shlex, signal,
+    subprocess, sys, time. No third-party packages, no dynamic imports.
+  * Every subprocess goes through run_watched: a list argv, never a shell; no
+    stdin and no prompts (GIT_TERMINAL_PROMPT=0); GIT_OPTIONAL_LOCKS=0; an
+    inherited GIT_DIR/GIT_WORK_TREE dropped. Its watchdog prints a "still
+    waiting" line to stderr every few seconds (STATUS_BOARD_WARN_SECS,
+    default 5) and kills the command and its process group at a hard limit
+    (STATUS_BOARD_KILL_SECS, default 60). Only positive numbers are taken
+    from those variables; they change timing only, never what runs.
+  * Read-only git: the only command run is git (see git_out), and only
+    commands that read — symbolic-ref (one argument), rev-parse --verify,
+    ls-tree and for-each-ref — to compare plans/ with the remote's main
+    (main_drift). It never fetches (lazy fetching of a partial clone's missing
+    objects is switched off with --no-lazy-fetch; on git older than 2.44 the
+    check is skipped), pushes, commits or checks out. No git: the check is
+    skipped. A watchdog kill: the check is skipped with a drift row saying so.
   * Read-only: every open() below uses the default read mode (see parse_readme,
     parse_next_order and fallback_desc). The script never writes, creates,
     deletes, or renames anything on disk.
@@ -40,15 +46,19 @@ Security properties (for auditors — each is verifiable against the code below)
   * No network: no sockets, no urllib/http; git is never asked to fetch or push.
   * Bounded I/O: the only inputs are the --root/--scope CLI args, files under
     <root>/plans/ and the repo's git refs. The only output is the Markdown table
-    (or the "NO_BOARD" sentinel) printed to stdout.
+    (or the "NO_BOARD" sentinel) printed to stdout; the watchdog's lines go
+    to stderr.
   * No ReDoS: every regex is a simple linear pattern over single character
     classes; inputs are local files, not attacker-controlled streams.
 """
 import argparse
 import os
 import re
+import shlex
+import signal
 import subprocess
 import sys
+import time
 
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
 HEADERS = {
@@ -96,6 +106,81 @@ GENERIC_HEADINGS = {
 }
 MAX_DESC = 150
 REMOTE_PREFIX = "refs/remotes/origin/"
+WARN_ENV, KILL_ENV = "STATUS_BOARD_WARN_SECS", "STATUS_BOARD_KILL_SECS"
+WARN_SECS, KILL_SECS = 5.0, 60.0
+
+
+class Watchdog(Exception):
+    """A watched command ran past its hard limit and was stopped."""
+
+    def __init__(self, argv, cwd, secs):
+        super().__init__(f"`{shlex.join(argv)}` in {cwd} did not finish in "
+                         f"{secs:.0f}s and was stopped")
+        self.argv, self.cwd, self.secs = argv, cwd, secs
+
+
+def watch_secs(warn=None, kill=None):
+    """(warn, kill) seconds: the arguments, else the environment, else 5 and 60."""
+    def pick(given, name, default):
+        if given:
+            return given
+        try:
+            value = float(os.environ.get(name, ""))
+        except ValueError:
+            return default
+        return value if 0 < value < float("inf") else default   # also refuses nan
+    return pick(warn, WARN_ENV, WARN_SECS), pick(kill, KILL_ENV, KILL_SECS)
+
+
+def _stop(p):
+    """Kill a watched command and whatever it started (its process group)."""
+    try:
+        if os.name == "posix":
+            os.killpg(p.pid, signal.SIGKILL)
+        else:
+            p.kill()
+    except OSError:
+        pass
+    try:
+        p.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
+    """Run `argv` in `cwd` (no shell, no stdin, no prompts) under a watchdog.
+
+    After `warn` seconds, and every `warn` seconds after, a line on `log`
+    (stderr) names the command still running; at `kill` seconds it is stopped
+    and Watchdog is raised. With `trace`, every command is logged with its exit
+    code and time. Returns a CompletedProcess; OSError (no such program)
+    propagates."""
+    warn, kill = watch_secs(warn, kill)
+    log = log or sys.stderr
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    group = ({"start_new_session": True} if os.name == "posix"
+             else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP})
+    start = time.monotonic()
+    p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", **group)
+    while True:
+        left = kill - (time.monotonic() - start)
+        try:
+            out, err = p.communicate(timeout=max(0.01, min(warn, left)))
+            break
+        except subprocess.TimeoutExpired:
+            secs = time.monotonic() - start
+            if secs >= kill:
+                _stop(p)
+                raise Watchdog(argv, cwd, secs) from None
+            print(f"[status-board] still waiting on `{shlex.join(argv)}` in {cwd} "
+                  f"({secs:.0f}s)", file=log, flush=True)
+    if trace:
+        print(f"[status-board] `{shlex.join(argv)}` in {cwd}: exit {p.returncode}, "
+              f"{time.monotonic() - start:.2f}s", file=log, flush=True)
+    return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 
 def stem(name):
@@ -316,19 +401,13 @@ def esc(s):
 
 def git_out(root, *args):
     """stdout of a read-only git command run in `root`, or None (no git, not a
-    repo, an unknown ref, git older than 2.44, a timeout…). Used only by
-    main_drift. --no-lazy-fetch stops a partial clone fetching missing objects
-    from its remote; with no stdin and no terminal prompt git can't wait on
-    the user. An inherited GIT_DIR/GIT_WORK_TREE is dropped so `-C root` always
-    means root's repo."""
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    repo, an unknown ref, git older than 2.44…). Used only by main_drift.
+    --no-lazy-fetch stops a partial clone fetching missing objects from its
+    remote. run_watched drops an inherited GIT_DIR/GIT_WORK_TREE, so `-C root`
+    always means root's repo; a hung git raises Watchdog."""
     try:
-        p = subprocess.run(["git", "--no-lazy-fetch", "-C", root, *args],
-                           capture_output=True, stdin=subprocess.DEVNULL,
-                           text=True, encoding="utf-8", errors="replace",
-                           env=env, timeout=5)
-    except (OSError, subprocess.TimeoutExpired):   # no git, or git hung
+        p = run_watched(["git", "--no-lazy-fetch", "-C", root, *args], root)
+    except OSError:                                # no git
         return None
     return p.stdout.strip() if p.returncode == 0 else None
 
@@ -360,7 +439,15 @@ def main_drift(root, plans):
     [] with no git or remote, or on the main branch itself. A squash-merged
     branch is seen as merged only once its upstream is gone locally (`git fetch
     --prune`); a stale origin/main can give a needless "run finish" row (finish
-    is idempotent)."""
+    is idempotent). A git stopped by the watchdog gives one row saying the
+    check was skipped."""
+    try:
+        return _main_drift(root, plans)
+    except Watchdog as e:
+        return [("origin/main", f"main check skipped: {e}")]
+
+
+def _main_drift(root, plans):
     ref = main_ref(root)
     if not ref:
         return []

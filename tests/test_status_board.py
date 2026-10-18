@@ -478,3 +478,128 @@ def test_main_check_never_fetches_a_partial_clones_missing_trees(tmp_path):
     before = _packs(tl)
     _git_run(tl)
     assert _packs(tl) == before
+
+
+# --- the watchdog on every command --------------------------------------------
+
+import io  # noqa: E402
+import shutil  # noqa: E402
+import time  # noqa: E402
+
+sys.path.insert(0, str(pathlib.Path(SCRIPT).parent))
+import status_board as board  # noqa: E402
+
+POSIX = pytest.mark.skipif(os.name != "posix", reason="the fake git is a POSIX shell script")
+REAL_GIT = shutil.which("git")
+
+
+def _fake_git(tmp_path, hang_on):
+    """A dir holding a `git` that runs the real git, except that when its
+    arguments include `hang_on` it starts a `sleep` (its pid in tmp_path/sleeper)
+    and waits on it — so only a kill of the whole process group stops both."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do\n'
+        f'  if [ "$a" = "{hang_on}" ]; then\n'
+        f"    sleep 30 & echo $! > '{tmp_path / 'sleeper'}'; wait; exit 1\n"
+        "  fi\n"
+        "done\n"
+        f"exec '{REAL_GIT}' \"$@\"\n", encoding="utf-8")
+    fake.chmod(0o755)
+    return bin_dir
+
+
+def _gone(pid, within=3.0):
+    """Whether process `pid` has exited (and been reaped) within `within` s."""
+    end = time.monotonic() + within
+    while time.monotonic() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@POSIX
+def test_watchdog_warns_then_stops_the_command_and_its_children(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status')}{os.pathsep}{os.environ['PATH']}")
+    log = io.StringIO()
+    start = time.monotonic()
+    with pytest.raises(board.Watchdog) as caught:
+        board.run_watched(["git", "status"], str(tmp_path), warn=0.2, kill=1, log=log)
+    assert time.monotonic() - start < 2.5
+    assert caught.value.argv == ["git", "status"] and caught.value.secs >= 1
+    assert "`git status`" in str(caught.value) and "was stopped" in str(caught.value)
+    beats = log.getvalue().splitlines()
+    assert len(beats) >= 3
+    assert all(b.startswith(f"[status-board] still waiting on `git status` in {tmp_path} (")
+               for b in beats)
+    assert _gone(int((tmp_path / "sleeper").read_text()))
+
+
+def test_watchdog_times_from_arguments_then_environment(monkeypatch):
+    monkeypatch.delenv(board.WARN_ENV, raising=False)
+    monkeypatch.delenv(board.KILL_ENV, raising=False)
+    assert board.watch_secs() == (5.0, 60.0)
+    monkeypatch.setenv(board.WARN_ENV, "0.5")
+    monkeypatch.setenv(board.KILL_ENV, "7")
+    assert board.watch_secs() == (0.5, 7.0)
+    assert board.watch_secs(warn=2, kill=3) == (2, 3)
+    for bad in ("", "soon", "0", "-4", "nan-ish"):
+        monkeypatch.setenv(board.WARN_ENV, bad)
+        monkeypatch.setenv(board.KILL_ENV, bad)
+        assert board.watch_secs() == (5.0, 60.0)
+
+
+def test_watched_command_gets_no_stdin_no_prompts_and_no_inherited_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_DIR", "/elsewhere/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/elsewhere")
+    code = ("import os, sys; e = os.environ; print(sys.stdin.read() == '', "
+            "'GIT_DIR' in e, 'GIT_WORK_TREE' in e, e['GIT_TERMINAL_PROMPT'], "
+            "e['GIT_OPTIONAL_LOCKS'], os.getcwd() == sys.argv[1])")
+    p = board.run_watched([sys.executable, "-c", code, os.path.realpath(tmp_path)],
+                          str(tmp_path))
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split() == ["True", "False", "False", "0", "0", "True"]
+
+
+def test_trace_logs_each_command_with_its_exit_and_time(tmp_path):
+    log = io.StringIO()
+    p = board.run_watched([sys.executable, "-c", "raise SystemExit(3)"], str(tmp_path),
+                          trace=True, log=log)
+    assert p.returncode == 3
+    assert re.fullmatch(rf"\[status-board\] `.+` in {re.escape(str(tmp_path))}: "
+                        r"exit 3, \d+\.\d\ds\n", log.getvalue())
+    quiet = io.StringIO()
+    board.run_watched([sys.executable, "-c", "pass"], str(tmp_path), log=quiet)
+    assert quiet.getvalue() == ""
+
+
+def test_no_such_program_raises_oserror_and_git_out_gives_none(tmp_path, monkeypatch):
+    with pytest.raises(OSError):
+        board.run_watched([str(tmp_path / "no-such-program")], str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert board.git_out(str(tmp_path), "rev-parse", "HEAD") is None
+
+
+@POSIX
+@NEEDS_GIT_2_44
+def test_main_check_hang_shows_a_skip_row(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _branch(main, tmp_path)
+    _start_on_branch(wt)
+    env = dict(repos.ENV, STATUS_BOARD_WARN_SECS="0.2", STATUS_BOARD_KILL_SECS="1",
+               PATH=f"{_fake_git(tmp_path, 'ls-tree')}{os.pathsep}{repos.ENV['PATH']}")
+    p = subprocess.run([sys.executable, SCRIPT, "--root", str(wt)], capture_output=True,
+                       text=True, encoding="utf-8", env=env)
+    assert p.returncode == 0, p.stderr
+    rows = _section(p.stdout.splitlines(), "⚠️ Drift")
+    assert len(rows) == 1
+    assert rows[0].startswith("| origin/main | main check skipped: `git --no-lazy-fetch -C ")
+    assert rows[0].endswith(" was stopped |") and " ls-tree " in rows[0]
+    assert "[status-board] still waiting on `git --no-lazy-fetch" in p.stderr
+    assert _gone(int((tmp_path / "sleeper").read_text()))
