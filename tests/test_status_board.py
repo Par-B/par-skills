@@ -883,3 +883,96 @@ def test_archive_order_breaks_ties_after_the_readmes(tmp_path):
         assert _section(_run(r, scope), DONE) == [
             "| 2026-01-01-b | Title of 2026-01-01-b |",
             "| 2026-01-01-c | Title of 2026-01-01-c |"]
+
+
+# --- migration of boards older than 0.7.1: notes newest first, 0.7 conventions ---
+
+def _unsorted_row(n):
+    return f"| plans/README.md | done/won't-do notes aren't newest first (line {n}) — migrate |"
+
+
+OLD_CONVENTIONS_ROW = ("| plans/README.md | conventions predate 0.7 "
+                       "(start/finish, notes newest first) — migrate |")
+NEW_CONVENTIONS = ["## Conventions", "",
+                   "- The `done` and `wont-do` sections list notes **newest first**: a",
+                   "  finished plan's note goes at the top of its section.", ""]
+
+
+NEXT_HEAD = ["## ⚪ not started — next, in order", "", "*(none)*", ""]
+
+
+def _line_of(readme, text):
+    return readme.split("\n").index(text) + 1
+
+
+@pytest.mark.parametrize("state", ["done", "wont-do"])
+def test_oldest_first_notes_flagged_in_full_scope_only(tmp_path, state):
+    notes = ["2026-01-01-a", "2026-03-01-c", "2026-02-01-b"]
+    readme = _closed_readme(**{state.replace("-", ""): notes})
+    r = _board(tmp_path, readme, [f"{state}/{s}" for s in notes])
+    row = _unsorted_row(_line_of(readme, "- `2026-01-01-a` — note."))
+    assert _run(r)[-1] == row
+    assert row not in _run(r, "done" if state == "done" else "wontdo")
+
+
+def test_the_first_note_with_a_newer_one_below_is_the_line_flagged(tmp_path):
+    notes = ["2026-03-01-c", "2026-02-01-b", "2026-02-15-x", "2026-01-01-a"]
+    readme = _closed_readme(done=notes)
+    r = _board(tmp_path, readme, [f"done/{s}" for s in notes])
+    assert _run(r)[-1] == _unsorted_row(_line_of(readme, "- `2026-02-01-b` — note."))
+
+
+def test_same_date_and_undated_notes_are_not_flagged(tmp_path):
+    notes = ["2026-02-01-b", "2026-02-01-a", "undated", "2026-01-01-z-{design,plan}",
+             "older-undated"]
+    readme = _closed_readme(done=notes, before=NEW_CONVENTIONS + NEXT_HEAD)
+    lines = _run(_board(tmp_path, readme, ["done/2026-02-01-a", "done/2026-02-01-b"]))
+    assert "| **⚠️ Drift** | |" not in lines
+
+
+def test_hidden_and_stray_notes_are_not_flagged(tmp_path):
+    readme = _closed_readme(
+        done=["2026-02-01-b", "2026-01-01-a"],
+        before=["## ⚪ backlog — not started", "", "- `2026-01-01-y` — old note.", ""],
+        done_top=["<!--", "- `2025-01-01-old` — example.", "-->",
+                  "```", "- `2025-01-01-old` — example.", "```", ""])
+    files = ["done/2026-01-01-a", "done/2026-02-01-b", "done/2026-01-01-y"]
+    assert not any("newest first (line" in ln for ln in _run(_board(tmp_path, readme, files)))
+
+
+OLD_CONVENTION_LINES = {
+    "pre-0.7 ships line": ["## Conventions", "",
+                           "- When work starts, move the plan to `active/`. When it ships,",
+                           "  move it to `done/`.", ""],
+    "no newest-first line": ["## Conventions", "", "- Naming: `YYYY-MM-DD-<slug>`.", ""],
+    "both": NEW_CONVENTIONS[:-1] + ["- When work starts, move the plan to `active/`. "
+                                    "When it ships, move it to `done/`.", ""],
+    "newest first only in a comment": ["## Conventions", "",
+                                       "<!-- notes go newest first -->", ""],
+}
+
+
+@pytest.mark.parametrize("conventions", OLD_CONVENTION_LINES.values(),
+                         ids=OLD_CONVENTION_LINES.keys())
+def test_old_conventions_flagged_in_full_scope_only(tmp_path, conventions):
+    r = _board(tmp_path, _closed_readme(before=conventions))
+    assert _run(r)[-1] == OLD_CONVENTIONS_ROW
+    assert OLD_CONVENTIONS_ROW not in _run(r, "done")
+
+
+def test_new_conventions_and_no_conventions_are_not_flagged(tmp_path):
+    for n, before in enumerate([NEW_CONVENTIONS, []]):
+        r = _board(tmp_path / str(n), _closed_readme(before=before + NEXT_HEAD))
+        assert "| **⚠️ Drift** | |" not in _run(r)
+
+
+def test_both_migration_rows_come_last_after_the_pre_05_row(tmp_path):
+    readme = "\n".join(["# Plans", "", *OLD_CONVENTION_LINES["pre-0.7 ships line"],
+                        "## 🟢 done", "", "- `2026-01-01-a` — x.", "- `2026-02-01-b` — y.", ""])
+    lines = _run(_board(tmp_path, readme, ["done/2026-01-01-a", "done/2026-02-01-b"]))
+    assert lines[-3:] == [PRE05, _unsorted_row(_line_of(readme, "- `2026-01-01-a` — x.")),
+                          OLD_CONVENTIONS_ROW]
+
+
+def test_this_repos_board_lists_its_notes_newest_first():
+    assert not any("newest first (line" in ln for ln in _run(REPO))

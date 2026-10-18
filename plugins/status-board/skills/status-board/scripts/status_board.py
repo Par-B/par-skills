@@ -42,7 +42,7 @@ Security properties (for auditors — each is verifiable against the code below)
     check is skipped), pushes, commits or checks out. No git: the check is
     skipped. A watchdog kill: the check is skipped with a drift row saying so.
   * Read-only: every open() below uses the default read mode (see parse_readme,
-    parse_next_order and fallback_desc). The script never writes, creates,
+    parse_next_order, parse_migrations and fallback_desc). The script never writes, creates,
     deletes, or renames anything on disk.
   * No code execution: no os.system / eval / exec / compile / __import__, no
     shell. File contents are read as text and pattern-matched only — never
@@ -113,6 +113,11 @@ STATE_WORDS = [
     ("wont-do", re.compile(r"\bwon[’']?t[- ]?do\b|\brejected\b", re.I)),
 ]
 NONE_LINE = "*(none)*"
+CONVENTIONS_RE = re.compile(r"\bconventions?\b", re.I)
+# Conventions from before 0.7: the template's old line, and no word that new
+# done/wont-do notes go at the top (the 0.7.1 template's marker phrase).
+OLD_CONVENTION = "when it ships, move it to done/"
+NEWEST_FIRST = "newest first"
 GENERIC_HEADINGS = {
     "future ideas", "future", "ideas", "overview", "summary", "problem",
     "what", "why", "background", "motivation", "goal", "goals", "context",
@@ -542,6 +547,60 @@ def parse_next_order(path):
     return order, legacy
 
 
+def parse_migrations(path):
+    """Read plans/README.md (read-only) and return the migration messages for
+    a board older than 0.7.1: one per done/wont-do section whose notes aren't
+    newest first (see unsorted_note), and one when its Conventions predate 0.7
+    (see old_conventions). Text parsing only."""
+    try:
+        # Read-only: parse the README as text. Contents are pattern-matched only.
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().split("\n")   # line numbers as editors/grep -n count
+    except OSError:
+        return []
+    layout = section_layout(lines)
+    out = []
+    for kind in ("done", "wont-do"):
+        n = unsorted_note(lines, kind, layout) if kind in layout[0] else None
+        if n is not None:
+            out.append(f"done/won't-do notes aren't newest first (line {n + 1}) — migrate")
+    if old_conventions(lines, *scan_lines(lines)):
+        out.append("conventions predate 0.7 (start/finish, notes newest first) — migrate")
+    return out
+
+
+def unsorted_note(lines, kind, layout):
+    """The index of the first note in the `kind` section dated older than a
+    note below it (the date in its plan's YYYY-MM-DD- prefix), or None.
+    Undated notes are ignored; same-date notes are in order."""
+    dated = []
+    for start, _, named in section_items(lines, kind, layout):
+        dates = sorted(m.group(1) for s in named if (m := DATE_RE.match(s)))
+        if dates:
+            dated.append((start, dates[0]))
+    found, below = None, ""          # below: the newest date under this note
+    for start, date in reversed(dated):
+        if date < below:
+            found = start            # walking up, the last hit is the topmost
+        below = max(below, date)
+    return found
+
+
+def old_conventions(lines, heads, hidden):
+    """True when the README's Conventions part (under the first heading naming
+    conventions, to the next heading of the same or a higher level) keeps the
+    pre-0.7 "When it ships, move it to `done/`." line or never says the
+    done/wont-do notes go newest first. Fenced code and HTML comments don't
+    count; no Conventions heading, no row."""
+    for n, (i, level, text) in enumerate(heads):
+        if CONVENTIONS_RE.search(text):
+            end = next((j for j, lv, _ in heads[n + 1:] if lv <= level), len(lines))
+            body = " ".join(lines[k] for k in range(i + 1, end) if k not in hidden)
+            body = re.sub(r"\s+", " ", re.sub(r"[`*]", "", body)).lower()
+            return OLD_CONVENTION in body or NEWEST_FIRST not in body
+    return False
+
+
 def fallback_desc(path):
     """Derive a one-line description from a plan file (read-only): its first
     non-generic heading, else its first prose line. Contents parsed as text only."""
@@ -823,6 +882,7 @@ def main():
         for n in legacy_next:
             migrate.append(
                 f'old-style next list at line {n} — move under "next — in order"')
+        migrate += parse_migrations(readme)
         if undocumented or stale or next_missing or missed or migrate:
             rows.append("| **⚠️ Drift** | |")
             for s in undocumented:

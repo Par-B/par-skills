@@ -79,6 +79,13 @@ to add the section — moving an old bold "Next, in this order" list under it if
 there is one. Say yes and that board is done; nothing changes until you do.
 Older installs (0.4.x) still read migrated boards.
 
+**Upgrading to 0.7.1:** boards made from older templates may list done/won't-do
+notes oldest first and keep the old "When it ships, move it to `done/`."
+Conventions line. The board flags them under ⚠️ Drift (`done/won't-do notes
+aren't newest first` and `conventions predate 0.7`) and the skill offers, once,
+to reorder those notes newest first and update the Conventions bullets — a
+plans-only commit (`Plans: migrate the board to 0.7.1`) pushed to `main`.
+
 ### status-board — starting and finishing plans on main (0.7+)
 
 Plans are built on branches, so a plan moved to `active/` on its branch still
@@ -337,8 +344,8 @@ What this means:
   only as `check`); `md-optimize`'s hook auto-approves *only* its safe
   subcommands (verified by `shlex` parsing, not a substring match).
 - **Destructive actions still prompt.** `status-board`'s `plans/` bootstrap
-  (`mkdir`/`touch`/`cp`) and its `plans/README.md` edits (the pre-0.5
-  migration, reordering the Next list) are not auto-approved by its hook, nor
+  (`mkdir`/`touch`/`cp`) and its `plans/README.md` edits (the pre-0.5 and
+  0.7.1 migrations, reordering the Next list) are not auto-approved by its hook, nor
   is any step of a start or finish (fetch, `git mv`, commit, push, branch,
   merge, README edits) — the check only prints them;
   `my-commits` never writes; and

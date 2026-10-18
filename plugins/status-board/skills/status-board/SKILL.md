@@ -170,7 +170,16 @@ absent, everything behaves exactly as a single-file board.
   old-style list (a non-list line starting in bold whose bold text holds "next"
   and "order", followed by an unindented list item naming a plan, as in the Next
   rules, before the next heading) → `old-style next list at line N — move under
-  "next — in order"`.
+  "next — in order"`; then, for boards older than 0.7.1, each done or wont-do
+  section (found as in the same-date rule) where a note dated by its plan's
+  `YYYY-MM-DD-` prefix sits above a note with a later date → `done/won't-do
+  notes aren't newest first (line N) — migrate` (N = the line of the first
+  such note; undated notes are ignored, same-date notes are in order); and,
+  when a Conventions part (under the first heading holding "convention", to
+  the next heading of the same or a higher level, outside fenced code and
+  HTML comments) still says "When it ships, move it to `done/`." or never says
+  "newest first" → `conventions predate 0.7 (start/finish, notes newest first)
+  — migrate`. No Conventions heading → no row.
 - `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
   Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
   one-row `*(none)*` table. Relay whatever it prints verbatim.
@@ -256,6 +265,41 @@ under an older plugin (0.4.x): it lists those plans under "Designed, not
 started" and adds no drift (for bare backticked slugs, as migration writes them;
 a path entry shows as undocumented there).
 
+## Migrate (pre-0.7.1 board)
+
+Boards made from older templates may list done/won't-do notes oldest first
+(appended at the bottom) and keep the old Conventions. The **⚠️ Drift** shows
+the `aren't newest first` and `conventions predate 0.7` rows for these (see
+Rules & format). After relaying a board that has either, offer once per render,
+in one combined question; after a decline, don't offer again in this
+conversation:
+
+> "This board's `plans/README.md` predates 0.7.1: <its done/won't-do notes
+> aren't newest first; its Conventions predate start/finish and newest-first
+> notes>. Update it?" (name only the parts its rows flag)
+
+On explicit approval, edit `plans/README.md` with your own tools:
+
+1. Each flagged done/won't-do section: reorder its notes (each with its
+   continuation lines) newest first by the date in their plan's slug, keeping
+   same-date notes in their relative order — unless the whole section's dated
+   notes were oldest first (dates never going down), then reverse the
+   same-date groups too. Undated notes keep their place at the end.
+2. Conventions, with the bullets copied from `references/readme-template.md`:
+   replace the line "When work starts, move the plan to `active/`. When it
+   ships, move it to `done/`." with the template's start/finish bullet (add it
+   if neither is there), and add its newest-first bullet ("The `done` and
+   `wont-do` sections list notes **newest first** …") after the `*.tasks.json`
+   bullet (else at the end of the list) if missing. Change nothing else.
+3. Re-run the script: the migration rows must be gone.
+
+This is a plans-only edit, so it goes straight to `main` and is pushed: in a
+checkout of `main` (the main checkout; `git worktree list` shows it) brought
+level with `git fetch origin` and `git merge --ff-only --no-autostash
+origin/main`, make the edit there, commit just `plans/README.md` as `Plans:
+migrate the board to 0.7.1` and `git push origin HEAD:refs/heads/main`. A
+branch picks it up when it next merges `main`.
+
 ## Change the order (on request)
 
 When the user asks to change what comes next ("put the search plan next", "move
@@ -278,7 +322,8 @@ leaves the section by itself.
 ## Out of scope
 
 View, bootstrap, migrate and reorder only. Migration edits only `plans/README.md`,
-and only after explicit approval; reordering edits only the Next list, on the
+and only after explicit approval (the 0.7.1 one commits it on `main` and
+pushes); reordering edits only the Next list, on the
 user's request. Do NOT move plans between states, rename them, or create
 individual plan files here — starting and finishing a plan are
 `/status-board:start` and `/status-board:finish`; writing plans is the user's

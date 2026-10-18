@@ -42,7 +42,14 @@ backlog note or a Conventions bullet naming the plan above that section, and a
 fenced example or a commented-out item inside it, don't change the order.
 Migration: a board without the heading and
 an old-style bold "next … order" list are flagged as `plans/README.md` drift
-rows (full scope only), while prose and a bold line with no list are not. A
+rows (full scope only), while prose and a bold line with no list are not. So
+are boards older than 0.7.1: a done or wont-do section with a dated note above
+a later-dated one (the line of the first such note), but not for same-date or
+undated notes, nor for stray mentions, fenced code or comments; and Conventions
+that keep the old "When it ships" line or never say "newest first" (a comment
+doesn't count), but not the template's, nor a board with no Conventions
+heading. These rows come last, after the pre-0.5 one, and this repo's own
+board lists its notes newest first. A
 frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)
 reads the template and a migrated board with no drift, so old installs keep
 working. A code fence or a stray backtick no longer hides later backticked
