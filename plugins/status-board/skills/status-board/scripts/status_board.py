@@ -6,7 +6,8 @@ the source of truth; descriptions are enriched from plans/README.md notes (and,
 for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
 to each plan file's title. Drift between folders and README is flagged, as
 are pre-0.5 boards (no "next — in order" heading, or an old bold "next … order"
-list) so the skill can offer migration. Rendered off the main branch, it also
+list) and pre-0.7.1 ones (old Conventions, done/won't-do notes not newest
+first) so the skill can offer migration. Rendered off the main branch, it also
 compares plans/ with origin/main (read-only git) and flags a start or finish
 missed there. An optional "next — in order" list in README.md becomes a
 "Not started: next, in order" section drawn from backlog/.
@@ -41,9 +42,10 @@ Security properties (for auditors — each is verifiable against the code below)
     objects is switched off with --no-lazy-fetch; on git older than 2.44 the
     check is skipped), pushes, commits or checks out. No git: the check is
     skipped. A watchdog kill: the check is skipped with a drift row saying so.
-  * Read-only: every open() below uses the default read mode (see parse_readme,
-    parse_next_order and fallback_desc). The script never writes, creates,
-    deletes, or renames anything on disk.
+  * Read-only: every open() below uses the default read mode (see read_text,
+    which main uses for README.md and ARCHIVE.md, and fallback_desc, for a
+    plan file). The script never writes, creates, deletes, or renames
+    anything on disk.
   * No code execution: no os.system / eval / exec / compile / __import__, no
     shell. File contents are read as text and pattern-matched only — never
     interpreted or run.
@@ -96,13 +98,28 @@ MD_TOKEN_RE = re.compile(r"[\w.\-{},]+\.md")          # may contain a {a,b} grou
 # pairing of every backtick after it (slugs never wrap).
 BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 FUTURE_PREFIX_RE = re.compile(r"^future(\s+ideas?)?\s*[:—-]\s*", re.I)
-HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 NEXT_WORD_RE = re.compile(r"\bnext\b", re.I)
 ORDER_WORD_RE = re.compile(r"\border\b", re.I)
 # Unindented only: a nested item can sit as little as 2-3 spaces in (the width
 # of its parent's "- " or "1. " marker), so any indent means "sub-item".
 LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]|[-*+])\s+(.*)$")
 LEGACY_NEXT_RE = re.compile(r"^(\*\*|__)(.+?)\1")   # a line starting in bold
+# A README section's kind, after the "next … order" list: the state whose word
+# comes earliest in its heading (see section_kind).
+STATE_WORDS = [
+    ("active", re.compile(r"\bactive\b|\bin flight\b", re.I)),
+    ("backlog", re.compile(r"\bbacklog\b", re.I)),
+    ("future-ideas", re.compile(r"\bfuture\b|\bideas?\b", re.I)),
+    ("done", re.compile(r"\bdone\b|\bshipped\b", re.I)),
+    ("wont-do", re.compile(r"\bwon[’']?t[- ]?do\b|\brejected\b", re.I)),
+]
+NONE_LINE = "*(none)*"
+CONVENTIONS_RE = re.compile(r"\bconventions?\b", re.I)
+# Conventions from before 0.7: the template's old line, and no word that new
+# done/wont-do notes go at the top (the 0.7.1 template's marker phrase).
+OLD_CONVENTION = "when it ships, move it to done/"
+NEWEST_FIRST = "newest first"
 GENERIC_HEADINGS = {
     "future ideas", "future", "ideas", "overview", "summary", "problem",
     "what", "why", "background", "motivation", "goal", "goals", "context",
@@ -278,46 +295,61 @@ def date_sort_key(fname):
     return (0, "") if not m else (1, m.group(1))
 
 
-def parse_readme(path):
-    """Read plans/README.md (read-only) and extract, by pure text parsing:
-      notes{stem:note}, documented_stems (mentioned anywhere), table_stems
-      (rows that define a plan). File contents are never executed."""
-    notes, documented, table = {}, set(), set()
+def read_text(path):
+    """A board file's text, or None when it can't be read. Read-only."""
     try:
-        # Read-only: parse the README as text. Contents are pattern-matched only.
+        # Read-only: the file is read as text. Contents are pattern-matched only.
         with open(path, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+            return fh.read()
     except OSError:
-        return notes, documented, table
+        return None
+
+
+def parse_readme(text, kinds=(), layout=None):
+    """Extract from plans/README.md's (or ARCHIVE.md's) text, by pure text
+    parsing: notes{stem:note}, documented_stems (mentioned anywhere),
+    table_stems (rows that define a plan), and order{kind: {stem: line}} for
+    each of the `kinds` sections the text has (see section_order). `layout` is
+    section_layout(text.split("\\n")) when the caller has it already."""
+    notes, documented, table, order = {}, set(), set(), {}
+    if kinds:
+        layout = layout or section_layout(text.split("\n"))
+        lines = text.split("\n")
+        order = {kind: section_order(lines, kind, layout)
+                 for kind in kinds if kind in layout[0]}
     text = text.replace("\r\n", "\n").replace("\r", " ")
     # Anything mentioned anywhere counts as "documented": .md tokens + backticked slugs.
     documented |= mentioned_stems(text)
     # Table rows define plan entries + their notes (used for stale + descriptions).
     for line in text.splitlines():
-        if "|" not in line:
-            continue
-        # Split on unescaped pipes only, then unescape \| inside cells.
-        parts = re.split(r"(?<!\\)\|", line.strip())
-        if parts and parts[0] == "":
-            parts = parts[1:]
-        if parts and parts[-1] == "":
-            parts = parts[:-1]
-        cells = [p.strip().replace("\\|", "|") for p in parts]
-        for i, c in enumerate(cells):
-            toks = MD_TOKEN_RE.findall(c)
-            toks = [t for t in toks if stem(t) != "README"]
-            if not toks:
-                continue
+        stems, note = table_row(line)
+        table |= stems
+        documented |= stems
+        if note:
+            notes.update(dict.fromkeys(stems, note))
+    return notes, documented, table, order
+
+
+def table_row(line):
+    """(stems, note) for a table row: the stems of the first .md filename
+    (brace-expanded, README excepted) in its first cell holding one, and its
+    last non-empty cell after that, cleaned. (set(), "") for any other line."""
+    if "|" not in line:
+        return set(), ""
+    # Split on unescaped pipes only, then unescape \| inside cells.
+    parts = re.split(r"(?<!\\)\|", line.strip())
+    if parts and parts[0] == "":
+        parts = parts[1:]
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    cells = [p.strip().replace("\\|", "|") for p in parts]
+    for i, c in enumerate(cells):
+        toks = [t for t in MD_TOKEN_RE.findall(c) if stem(t) != "README"]
+        if toks:
             rest = [x for x in cells[i + 1:] if x and set(x) != {"-"}]
-            note = clean(rest[-1]) if rest else ""
-            for exp in brace_expand(toks[0]):
-                s = stem(exp)
-                table.add(s)
-                documented.add(s)
-                if note:
-                    notes[s] = note
-            break
-    return notes, documented, table
+            return ({stem(exp) for exp in brace_expand(toks[0])},
+                    clean(rest[-1]) if rest else "")
+    return set(), ""
 
 
 def _first_token(text):
@@ -361,8 +393,161 @@ def names_next_order(text):
     return bool(NEXT_WORD_RE.search(text) and ORDER_WORD_RE.search(text))
 
 
-def parse_next_order(path):
-    """Read plans/README.md (read-only) and return (order, legacy).
+def scan_lines(lines):
+    """(headings, hidden): each heading as (index, level, text), and the indexes
+    of lines in fenced code or HTML comments (fences and markers included)."""
+    heads, hidden = [], set()
+    fenced = comment = False
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not comment and (s.startswith("```") or s.startswith("~~~")):
+            fenced = not fenced
+            hidden.add(i)
+        elif fenced:
+            hidden.add(i)
+        elif comment:
+            hidden.add(i)
+            comment = "-->" not in s
+        elif s.startswith("<!--"):
+            hidden.add(i)
+            comment = "-->" not in s[4:]
+        else:
+            m = HEADING_RE.match(s)
+            if m:
+                heads.append((i, len(m.group(1)), m.group(2)))
+    return heads, hidden
+
+
+def section_kind(heading):
+    """The section a heading starts: "next", the state whose word comes
+    earliest in it, or None."""
+    if names_next_order(heading):
+        return "next"
+    hits = [(m.start(), k) for k, rx in STATE_WORDS if (m := rx.search(heading))]
+    return min(hits)[1] if hits else None
+
+
+def _span_end(heads, n, nlines):
+    """Where heads[n]'s section ends: at the next heading of the same or a
+    higher level, else at the end."""
+    level = heads[n][1]
+    return next((j for j, lv, _ in heads[n + 1:] if lv <= level), nlines)
+
+
+def find_sections(lines, heads):
+    """{kind: (first, end)}: the body lines of the shallowest heading of each
+    kind, the first among equals."""
+    out, levels = {}, {}
+    for n, (i, level, text) in enumerate(heads):
+        kind = section_kind(text)
+        if kind and level < levels.get(kind, 7):
+            out[kind], levels[kind] = (i + 1, _span_end(heads, n, len(lines))), level
+    return out
+
+
+def _owners(nlines, secs):
+    """owner[i]: the kind of the innermost of `secs` holding line i (its
+    heading included), or None. Sections nest, never cross, so the innermost
+    is the one starting last."""
+    owner = [None] * nlines
+    for kind, (first, end) in sorted(secs.items(), key=lambda s: s[1][0]):
+        owner[first - 1:end] = [kind] * (end - first + 1)
+    return owner
+
+
+def section_layout(lines):
+    """(secs, hidden, headings, owner): find_sections' sections, scan_lines'
+    hidden lines, {index: (level, text)} of every heading, and owner[i], the
+    kind of the innermost section holding line i, or None."""
+    heads, hidden = scan_lines(lines)
+    secs = find_sections(lines, heads)
+    return (secs, hidden, {i: (lv, t) for i, lv, t in heads},
+            _owners(len(lines), secs))
+
+
+def _continues(line):
+    """True when a non-blank line after an item goes on with it: indented, or
+    an unindented (lazy) line that starts nothing new."""
+    s = line.strip()
+    return bool(s) and (line[:1] in (" ", "\t")
+                        or not (LIST_ITEM_RE.match(line) or s == NONE_LINE))
+
+
+def section_items(lines, kind, layout):
+    """[(start, stop, stems)] for each top-level list item whose first line the
+    `kind` section owns; an item runs on over its continuation lines."""
+    secs, hidden, headings, owner = layout
+    first, end = secs[kind]
+    out, i = [], first
+    while i < end:
+        m = (None if i in hidden or owner[i] != kind
+             else LIST_ITEM_RE.match(lines[i]))
+        if not m:
+            i += 1
+            continue
+        j = i + 1
+        while (j < end and j not in hidden and j not in headings
+               and _continues(lines[j])):
+            j += 1
+        out.append((i, j, item_slugs(m.group(1))))
+        i = j
+    return out
+
+
+def section_notes(lines, kind, layout):
+    """[(line, stems)] for each note of the `kind` section, in line order: a
+    top-level item (its plans as item_slugs reads them) or a table row (as
+    table_row reads it, by its .md filename) on a line the section owns —
+    not one of a nested section of another kind — outside fenced code and
+    HTML comments."""
+    secs, hidden, _, owner = layout
+    first, end = secs[kind]
+    items = {start: named for start, _, named in section_items(lines, kind, layout)}
+    out = []
+    for i in range(first, end):
+        if i not in hidden and owner[i] == kind:
+            named = items.get(i) or table_row(lines[i])[0]
+            if named:
+                out.append((i, named))
+    return out
+
+
+def closed_notes(lines, kind, layout):
+    """section_notes of the `kind` section; when it has none (as ARCHIVE.md's
+    shallowest done heading may be a bare index of the folder), those of the
+    shallowest level of other `kind` headings that has some — every heading of
+    that level, in line order."""
+    notes = section_notes(lines, kind, layout)
+    if notes:
+        return notes
+    secs, hidden, headings, _ = layout
+    heads = sorted((i, lv, t) for i, (lv, t) in headings.items())
+    spans = {}
+    for n, (i, level, text) in enumerate(heads):
+        if section_kind(text) == kind and i + 1 != secs[kind][0]:
+            spans.setdefault(level, []).append((i + 1, _span_end(heads, n, len(lines))))
+    for level in sorted(spans):
+        for first_end in spans[level]:
+            alt = {**secs, kind: first_end}
+            notes += section_notes(lines, kind,
+                                   (alt, hidden, headings, _owners(len(lines), alt)))
+        if notes:
+            return notes
+    return []
+
+
+def section_order(lines, kind, layout):
+    """{stem: line}: where closed_notes' note for each plan starts. A plan
+    named twice keeps its first line."""
+    order = {}
+    for i, named in closed_notes(lines, kind, layout):
+        for s in named:
+            order.setdefault(s, i)
+    return order
+
+
+def parse_next_order(text):
+    """From plans/README.md's text, return (order, legacy).
 
     `order` is the slugs listed under the "next — in order" heading, in order,
     or None when there is no such heading. A heading counts if it holds the
@@ -374,12 +559,7 @@ def parse_next_order(path):
     bold text names next and order, followed by an unindented list item naming
     a plan (as in the Next rules) before the next heading. HTML comments and
     fenced code are skipped. Text parsing only."""
-    try:
-        # Read-only: parse the README as text. Contents are pattern-matched only.
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().split("\n")   # line numbers as editors/grep -n count
-    except OSError:
-        return None, []
+    lines = text.split("\n")   # line numbers as editors/grep -n count
     order, legacy = None, []
     inside = fenced = comment = False
     pending = None                    # bold "next … order" line awaiting its list
@@ -399,7 +579,7 @@ def parse_next_order(path):
         m = HEADING_RE.match(s)
         if m:
             pending = None
-            inside = order is None and names_next_order(m.group(1))
+            inside = order is None and names_next_order(m.group(2))
             if inside:
                 order = []
             continue
@@ -416,6 +596,60 @@ def parse_next_order(path):
             if b and names_next_order(b.group(2)):
                 pending = n
     return order, legacy
+
+
+def migrations(lines, layout):
+    """The migration messages for a board older than 0.7.1, from its README's
+    lines and section_layout: when its Conventions predate 0.7.1 (see
+    old_conventions), one per done/wont-do section whose notes aren't newest
+    first (see unsorted_note), then one for the Conventions. A 0.7.1 board is
+    never flagged for its notes: finish puts each on top in the order plans
+    finish, which their dates need not follow."""
+    if not old_conventions(lines, layout):
+        return []
+    out = []
+    for kind in ("done", "wont-do"):
+        n = unsorted_note(lines, kind, layout) if kind in layout[0] else None
+        if n is not None:
+            out.append(f"done/won't-do notes aren't newest first (line {n + 1})"
+                       " — migrate")
+    return out + ["conventions predate 0.7.1 — migrate"]
+
+
+def unsorted_note(lines, kind, layout):
+    """The index of the first note (section_notes) in the `kind` section dated
+    older than a note below it in the same run of notes between headings (the
+    date in its plan's YYYY-MM-DD- prefix), or None. Undated notes are
+    ignored; same-date notes are in order."""
+    headings = layout[2]
+    found, below, prev = None, "", None   # below: the newest date under this note
+    for start, named in reversed(section_notes(lines, kind, layout)):
+        if prev is not None and any(h in headings for h in range(start, prev)):
+            below = ""                        # a heading between: a new run
+        prev = start
+        dates = sorted(m.group(1) for s in named if (m := DATE_RE.match(s)))
+        if dates:
+            if dates[0] < below:
+                found = start                 # walking up, the last hit is the topmost
+            below = max(below, dates[0])
+    return found
+
+
+def old_conventions(lines, layout):
+    """True when the README's Conventions part (under the first heading naming
+    conventions, to the next heading of the same or a higher level) keeps the
+    pre-0.7 "When it ships, move it to `done/`." line or never says the
+    done/wont-do notes go newest first. Fenced code and HTML comments don't
+    count; no Conventions heading, no row."""
+    _, hidden, headings, _ = layout
+    heads = sorted((i, lv, t) for i, (lv, t) in headings.items())
+    for n, (i, _, text) in enumerate(heads):
+        if CONVENTIONS_RE.search(text):
+            end = _span_end(heads, n, len(lines))
+            body = " ".join(lines[k] for k in range(i + 1, end) if k not in hidden)
+            body = re.sub(r"\s+", " ", re.sub(r"[`*]", "", body)).lower()
+            return OLD_CONVENTION in body or NEWEST_FIRST not in body
+    return False
 
 
 def fallback_desc(path):
@@ -603,13 +837,7 @@ def main():
     # single *(none)* table when it doesn't exist yet (backward-compatible).
     if args.scope == "archive":
         archive_path = os.path.join(plans, ARCHIVE_NAME)
-        body = ""
-        if os.path.isfile(archive_path):
-            try:
-                with open(archive_path, encoding="utf-8", errors="replace") as fh:
-                    body = fh.read()
-            except OSError:
-                body = ""
+        body = (read_text(archive_path) or "") if os.path.isfile(archive_path) else ""
         if body.strip():
             print(body.rstrip("\n"))
         else:
@@ -620,17 +848,29 @@ def main():
             ]))
         return 0
 
-    notes, documented, table_stems = parse_readme(readme)
+    closed = [s for s in SCOPES[args.scope] if s in ("done", "wont-do")]
+    text = read_text(readme) or ""
+    lines = text.split("\n")
+    layout = section_layout(lines) if closed else None   # full scope has closed
+    notes, documented, table_stems, order = parse_readme(text, closed, layout)
     # ARCHIVE.md (deep archive) is a second description source for plans whose
     # README note has rolled off. README notes win on a key collision.
     archive_path = os.path.join(plans, ARCHIVE_NAME)
-    if os.path.isfile(archive_path):
-        arch_notes, _, _ = parse_readme(archive_path)
+    arch_order = {}
+    arch_text = read_text(archive_path) if os.path.isfile(archive_path) else None
+    if arch_text is not None:
+        arch_notes, _, _, arch_order = parse_readme(arch_text, closed)
         for k, v in arch_notes.items():
             notes.setdefault(k, v)
+    # Same-date done/wont-do plans: by their note in that section of README.md
+    # (top first: it lists newest first), then of ARCHIVE.md, then no note.
+    ranks = {}
+    for state in closed:
+        ranks[state] = {s: (1, n) for s, n in arch_order.get(state, {}).items()}
+        ranks[state].update((s, (0, n)) for s, n in order.get(state, {}).items())
     # Not started: next, in order — the README's ordered list, kept to plans still in backlog/
     # and numbered by position. None = no heading, so no section at all.
-    next_order, legacy_next = parse_next_order(readme)
+    next_order, legacy_next = parse_next_order(text)
     # List entries count as documented by their reduced slug (`backlog/foo` -> foo).
     documented.update(next_order or [])
     backlog_dir = os.path.join(plans, "backlog")
@@ -653,8 +893,10 @@ def main():
         files = plan_files(d)
         if state == "backlog":
             files = [f for f in files if stem(f) not in next_live]
-        if state in ("done", "wont-do"):
-            files = sorted(files, key=date_sort_key, reverse=True)[:2]
+        if state in ranks:
+            rank = ranks[state]
+            files.sort(key=lambda f: rank.get(stem(f), (2, 0)))
+            files = sorted(files, key=date_sort_key, reverse=True)[:2]   # stable
         rows.append(f"| **{HEADERS[state]}** | |")
         if not files:
             rows.append("| *(none)* | |")
@@ -689,6 +931,7 @@ def main():
         for n in legacy_next:
             migrate.append(
                 f'old-style next list at line {n} — move under "next — in order"')
+        migrate += migrations(lines, layout)
         if undocumented or stale or next_missing or missed or migrate:
             rows.append("| **⚠️ Drift** | |")
             for s in undocumented:

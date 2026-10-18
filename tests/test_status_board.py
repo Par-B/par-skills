@@ -767,3 +767,265 @@ def test_main_check_hang_shows_a_skip_row(tmp_path, fake_git):
     pid = _sleeper_pid(tmp_path)
     assert pid is not None, "the fake git never started its sleeper"
     assert _gone(pid)
+
+
+# --- last 2 done / won't-do: same-date plans in the README's newest-first order ---
+
+DONE = "🟢 Last 2 done"
+WONTDO = "🚫 Last 2 won't-do"
+
+
+def _closed_readme(done=(), wontdo=(), before=(), done_top=()):
+    """A README whose done and wont-do sections list `done` / `wontdo` as
+    notes, top first (the README's own newest-first order); the `before` lines
+    go above the done section and the `done_top` lines above its notes."""
+    def notes(stems):
+        return [f"- `{s}` — note." for s in stems] or ["*(none)*"]
+    return "\n".join(["# Plans", "", *before,
+                      "## 🟢 done — shipped", "", *done_top, *notes(done), "",
+                      "## 🚫 wont-do — decided against", "", *notes(wontdo), ""])
+
+
+def test_same_date_done_plans_follow_the_readme_order(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c", "2026-01-01-a", "2026-01-01-b"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+def test_a_newer_date_still_wins_over_the_readme_order(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-02-01-b"]
+    readme = _closed_readme(done=["2026-01-01-a", "2026-02-01-b"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE)[0] == "| 2026-02-01-b | Title of 2026-02-01-b |"
+
+
+def test_a_same_date_plan_without_a_note_comes_after_those_with_one(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+def test_a_brace_note_orders_its_pair_and_wont_do_too(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-z-design", "done/2026-01-01-z-plan",
+             "wont-do/2026-01-01-p", "wont-do/2026-01-01-q"]
+    readme = _closed_readme(done=["2026-01-01-z-{design,plan}", "2026-01-01-a"],
+                            wontdo=["2026-01-01-q", "2026-01-01-p"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-z-design | Title of 2026-01-01-z-design |",
+        "| 2026-01-01-z-plan | Title of 2026-01-01-z-plan |"]
+    assert _section(lines, WONTDO) == [
+        "| 2026-01-01-q | Title of 2026-01-01-q |",
+        "| 2026-01-01-p | Title of 2026-01-01-p |"]
+
+
+ABOVE = {
+    "stale next entry": ["## ⚪ not started — next, in order", "",
+                         "1. `2026-01-01-b`: why", ""],
+    "leftover backlog note": ["## ⚪ backlog — not started", "",
+                              "- `2026-01-01-b` — old note.", ""],
+    "conventions bullet": ["## Conventions", "",
+                           "- e.g. `2026-01-01-b` names a plan.", ""],
+}
+HIDDEN = {
+    "fenced example": ["```", "- `2026-01-01-b` — an example note.", "```", ""],
+    "commented-out item": ["<!--", "- `2026-01-01-b` — dropped note.", "-->", ""],
+}
+
+
+@pytest.mark.parametrize("before", ABOVE.values(), ids=ABOVE.keys())
+def test_only_the_done_sections_notes_order_done_plans(tmp_path, before):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c", "2026-01-01-a", "2026-01-01-b"],
+                            before=before)
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+@pytest.mark.parametrize("top", HIDDEN.values(), ids=HIDDEN.keys())
+def test_hidden_lines_in_the_done_section_do_not_order(tmp_path, top):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c", "2026-01-01-a", "2026-01-01-b"],
+                            done_top=top)
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+def test_a_table_done_section_orders_by_its_rows(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = "\n".join([
+        "# Plans", "", "## 🟢 done — shipped", "", "| Plan | Note |", "|---|---|",
+        "| 2026-01-01-c.md | note |", "| 2026-01-01-a.md | note |",
+        "| 2026-01-01-b.md | note |", ""])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | note |", "| 2026-01-01-a | note |"]
+
+
+def test_archive_order_breaks_ties_after_the_readmes(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c",
+             "done/2026-01-01-d"]
+    r = _board(tmp_path, _closed_readme(done=["2026-01-01-b"]), files)
+    (r / "plans" / "ARCHIVE.md").write_text(
+        _closed_readme(done=["2026-01-01-c", "2026-01-01-b", "2026-01-01-a"]),
+        encoding="utf-8")
+    for scope in ("full", "done"):
+        assert _section(_run(r, scope), DONE) == [
+            "| 2026-01-01-b | Title of 2026-01-01-b |",
+            "| 2026-01-01-c | Title of 2026-01-01-c |"]
+
+
+# --- migration of boards older than 0.7.1: notes newest first, 0.7.1 conventions ---
+
+def _unsorted_row(n):
+    return f"| plans/README.md | done/won't-do notes aren't newest first (line {n}) — migrate |"
+
+
+OLD_CONVENTIONS_ROW = "| plans/README.md | conventions predate 0.7.1 — migrate |"
+NEW_CONVENTIONS = ["## Conventions", "",
+                   "- The `done` and `wont-do` sections list notes **newest first**: a",
+                   "  finished plan's note goes at the top of its section.", ""]
+OLD_CONVENTIONS = ["## Conventions", "",
+                   "- When work starts, move the plan to `active/`. When it ships,",
+                   "  move it to `done/`.", ""]
+NEXT_HEAD = ["## ⚪ not started — next, in order", "", "*(none)*", ""]
+
+
+def _line_of(readme, text):
+    return readme.split("\n").index(text) + 1
+
+
+def _note_rows(lines):
+    return [ln for ln in lines if "newest first (line" in ln]
+
+
+@pytest.mark.parametrize("state", ["done", "wont-do"])
+def test_oldest_first_notes_flagged_in_full_scope_only(tmp_path, state):
+    notes = ["2026-01-01-a", "2026-03-01-c", "2026-02-01-b"]
+    readme = _closed_readme(**{state.replace("-", ""): notes}, before=OLD_CONVENTIONS)
+    r = _board(tmp_path, readme, [f"{state}/{s}" for s in notes])
+    row = _unsorted_row(_line_of(readme, "- `2026-01-01-a` — note."))
+    assert _run(r)[-2:] == [row, OLD_CONVENTIONS_ROW]
+    assert row not in _run(r, "done" if state == "done" else "wontdo")
+
+
+def test_the_first_note_with_a_newer_one_below_is_the_line_flagged(tmp_path):
+    notes = ["2026-03-01-c", "2026-02-01-b", "2026-02-15-x", "2026-01-01-a"]
+    readme = _closed_readme(done=notes, before=OLD_CONVENTIONS)
+    r = _board(tmp_path, readme, [f"done/{s}" for s in notes])
+    assert _note_rows(_run(r)) == [_unsorted_row(_line_of(readme, "- `2026-02-01-b` — note."))]
+
+
+def test_notes_in_finish_order_on_a_0_7_1_board_are_not_flagged(tmp_path):
+    # finish puts each note on top in the order plans finish, not by their date
+    template = TEMPLATE.read_text(encoding="utf-8")
+    done = "## 🟢 done — shipped\n\n"
+    assert done + "*(none)*" in template
+    readme = template.replace(done + "*(none)*", done + "- `2026-01-01-a` — finished last.\n"
+                              "- `2026-02-01-b` — finished first.")
+    r = _board(tmp_path, readme, ["done/2026-01-01-a", "done/2026-02-01-b"])
+    assert "| **⚠️ Drift** | |" not in _run(r)
+
+
+def test_same_date_and_undated_notes_are_not_flagged(tmp_path):
+    notes = ["2026-02-01-b", "2026-02-01-a", "undated", "2026-01-01-z-{design,plan}",
+             "older-undated"]
+    readme = _closed_readme(done=notes, before=OLD_CONVENTIONS + NEXT_HEAD)
+    lines = _run(_board(tmp_path, readme, ["done/2026-02-01-a", "done/2026-02-01-b"]))
+    assert _note_rows(lines) == []
+
+
+def test_hidden_and_stray_notes_are_not_flagged(tmp_path):
+    readme = _closed_readme(
+        done=["2026-02-01-b", "2026-01-01-a"],
+        before=OLD_CONVENTIONS + ["## ⚪ backlog — not started", "",
+                                  "- `2026-01-01-y` — old note.", ""],
+        done_top=["<!--", "- `2025-01-01-old` — example.", "-->",
+                  "```", "- `2025-01-01-old` — example.", "```", ""])
+    files = ["done/2026-01-01-a", "done/2026-02-01-b", "done/2026-01-01-y"]
+    assert _note_rows(_run(_board(tmp_path, readme, files))) == []
+
+
+def test_notes_are_checked_within_each_run_between_headings(tmp_path):
+    readme = "\n".join(["# Plans", "", *OLD_CONVENTIONS, "## 🟢 done — shipped", "",
+                        "### 3.2", "", "- `2026-03-01-c` — x.", "- `2026-02-01-b` — x.", "",
+                        "### 3.1", "", "- `2026-02-15-e` — x.", "- `2026-01-01-a` — x.",
+                        "- `2026-01-05-d` — x.", ""])
+    files = ["done/2026-03-01-c", "done/2026-02-01-b", "done/2026-02-15-e",
+             "done/2026-01-01-a", "done/2026-01-05-d"]
+    lines = _run(_board(tmp_path, readme, files))
+    assert _note_rows(lines) == [_unsorted_row(_line_of(readme, "- `2026-01-01-a` — x."))]
+
+
+def test_oldest_first_table_rows_are_flagged(tmp_path):
+    readme = "\n".join(["# Plans", "", *OLD_CONVENTIONS, "## 🟢 done — shipped", "",
+                        "| Plan | Note |", "|---|---|", "| 2026-01-01-a.md | x |",
+                        "| 2026-02-01-b.md | y |", ""])
+    lines = _run(_board(tmp_path, readme, ["done/2026-01-01-a", "done/2026-02-01-b"]))
+    assert _note_rows(lines) == [_unsorted_row(_line_of(readme, "| 2026-01-01-a.md | x |"))]
+
+
+OLD_CONVENTION_LINES = {
+    "pre-0.7 ships line": OLD_CONVENTIONS,
+    "0.7.0, no newest-first line": ["## Conventions", "",
+                                    "- Naming: `YYYY-MM-DD-<slug>`.", ""],
+    "both": NEW_CONVENTIONS[:-1] + ["- When work starts, move the plan to `active/`. "
+                                    "When it ships, move it to `done/`.", ""],
+    "newest first only in a comment": ["## Conventions", "",
+                                       "<!-- notes go newest first -->", ""],
+}
+
+
+@pytest.mark.parametrize("conventions", OLD_CONVENTION_LINES.values(),
+                         ids=OLD_CONVENTION_LINES.keys())
+def test_old_conventions_flagged_in_full_scope_only(tmp_path, conventions):
+    r = _board(tmp_path, _closed_readme(before=conventions))
+    assert _run(r)[-1] == OLD_CONVENTIONS_ROW
+    assert OLD_CONVENTIONS_ROW not in _run(r, "done")
+
+
+def test_new_conventions_and_no_conventions_are_not_flagged(tmp_path):
+    for n, before in enumerate([NEW_CONVENTIONS, []]):
+        notes = ["2026-01-01-a", "2026-02-01-b"]          # oldest first
+        r = _board(tmp_path / str(n), _closed_readme(done=notes, before=before + NEXT_HEAD),
+                   [f"done/{s}" for s in notes])
+        assert "| **⚠️ Drift** | |" not in _run(r)
+
+
+def test_both_migration_rows_come_last_after_the_pre_05_row(tmp_path):
+    readme = "\n".join(["# Plans", "", *OLD_CONVENTIONS,
+                        "## 🟢 done", "", "- `2026-01-01-a` — x.", "- `2026-02-01-b` — y.", ""])
+    lines = _run(_board(tmp_path, readme, ["done/2026-01-01-a", "done/2026-02-01-b"]))
+    assert lines[-3:] == [PRE05, _unsorted_row(_line_of(readme, "- `2026-01-01-a` — x.")),
+                          OLD_CONVENTIONS_ROW]
+
+
+def test_this_repos_board_lists_its_notes_newest_first():
+    assert _note_rows(_run(REPO)) == []
+
+
+def test_archive_done_notes_found_under_a_bare_index_heading(tmp_path):
+    # ARCHIVE.md's shallowest done heading is an index naming no plan, so the
+    # notes are those of the next level's done sections, all of them, in order
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    r = _board(tmp_path, _closed_readme(), files)
+    (r / "plans" / "ARCHIVE.md").write_text("\n".join([
+        "# Plans — Archive", "", "## Rolled-off entries (newest first)", "",
+        "### Shipped — rolled off `recently done` (3.2)", "", "- `2026-01-01-c` — x.", "",
+        "### Shipped — rolled off `recently done` (3.1 and earlier)", "",
+        "- `2026-01-01-b` — x.", "- `2026-01-01-a` — x.", "",
+        "## Full `done/` index", "", "- 2026-01-01 — a", "- 2026-01-01 — b", ""]),
+        encoding="utf-8")
+    assert _section(_run(r, "done"), DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-b | Title of 2026-01-01-b |"]
