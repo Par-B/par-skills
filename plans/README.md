@@ -40,7 +40,7 @@ The board shows the ones still in backlog/, renumbered from 1. -->
 
 ## ⚪ backlog — not started
 
-*(none)*
+- `2026-10-17-md-optimize-hook-hardening-design` — md-optimize's auto-approval hook approves commands that run arbitrary code (script name matched in any token; `${…}`, zsh globs and braces not refused; nothing pinned); harden it like status-board's `approve_read_only.py`.
 
 ## 💡 future-ideas — raw, un-triaged
 
