@@ -154,6 +154,17 @@ owner changed that: **the script finds the path and the outcome; Claude runs it.
   evaluator and permission rules must see the real command); each carries a time limit
   for Claude's Bash call instead.
 
+### Done only after the merge (the owner, 2026-10-17)
+
+"cant make the plan done until after merge." This replaces the earlier decision that
+finishing stays with the branch: **a branch never moves its plan to `done/`.** While the work
+is on the branch the plan stays in `active/`; after the branch is merged,
+`/status-board:finish` moves it to `done/` on `main` (a plans-only commit, pushed), drops its
+trackers and moves its note. The board, rendered on a merged branch (its upstream gone),
+flags a plan still active both there and on `main`: "run /status-board:finish". This plan
+follows the rule itself: its PR leaves it in `active/`, and finish archives it after the
+merge.
+
 ## Result
 
 In progress on branch `status-board-start-and-finish-on-main`.

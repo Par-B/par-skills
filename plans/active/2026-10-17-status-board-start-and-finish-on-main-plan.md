@@ -2253,5 +2253,18 @@ watchdog tests and the converge-style flow tests; git ≥ 2.44 for the main chec
 
 #### R7: After the merge
 
-As Task 7, with step 3 replaced by: run `/status-board:finish 2026-10-17-status-board-start-and-finish-on-main`
-(fetch, check, carry out, re-check) — expect "Nothing to do" if the branch did the move.
+**Owner, 2026-10-17: "cant make the plan done until after merge."** The branch never moves
+its plan to `done/` (this replaces Task 7 step 1 and the design's "finishing stays with the
+branch"). The PR for this branch leaves this plan in `active/` with its tracker.
+
+After the merge:
+1. The user runs `/plugin marketplace update par-plugins` so the installed plugin is 0.7.0.
+2. In the main checkout, run `/status-board:finish 2026-10-17-status-board-start-and-finish-on-main`
+   (fetch, check, carry out each step, re-check) → it moves the design and plan to `done/`,
+   drops the tracker, moves the note to the top of done, commits "Plans: … done" and pushes;
+   the re-check says Nothing to do.
+3. Add to `~/.claude/CLAUDE.md`, under the plans-location bullet: "Before executing a plan,
+   start it with `/status-board:start`. Don't move a plan to `done/` on its branch: after
+   merging the branch, run `/status-board:finish`, which moves it on `main`. Plans-only commits
+   go straight to `main` and are pushed."
+4. The board (`status_board.py --scope full`) shows both files in "Last 2 done", no drift.
