@@ -521,6 +521,31 @@ def _fake_git(tmp_path, hang_on, escape=False):
     return bin_dir
 
 
+def _sleeper_pid(tmp_path):
+    """The fake git's sleeper pid, or None before it has been written."""
+    try:
+        return int((tmp_path / "sleeper").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+@pytest.fixture
+def fake_git(tmp_path):
+    """_fake_git for this test; afterwards, passed or failed, its sleeper and
+    the sleeper's process group are killed."""
+    yield lambda hang_on, escape=False: _fake_git(tmp_path, hang_on, escape)
+    pid = _sleeper_pid(tmp_path)
+    if pid is None:
+        return
+    for kill in (lambda: os.killpg(os.getpgid(pid), signal.SIGKILL),
+                 lambda: os.kill(pid, signal.SIGKILL)):
+        try:
+            if os.getpgid(pid) != os.getpgrp():          # never pytest's own group
+                kill()
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def _gone(pid, within=3.0):
     """Whether process `pid` has exited (and been reaped) within `within` s."""
     end = time.monotonic() + within
@@ -534,8 +559,8 @@ def _gone(pid, within=3.0):
 
 
 @POSIX
-def test_watchdog_warns_then_stops_the_command_and_its_children(tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status')}{os.pathsep}{os.environ['PATH']}")
+def test_watchdog_warns_then_stops_the_command_and_its_children(tmp_path, monkeypatch, fake_git):
+    monkeypatch.setenv("PATH", f"{fake_git('status')}{os.pathsep}{os.environ['PATH']}")
     log = io.StringIO()
     start = time.monotonic()
     with pytest.raises(board.Watchdog) as caught:
@@ -551,37 +576,46 @@ def test_watchdog_warns_then_stops_the_command_and_its_children(tmp_path, monkey
 
 
 @POSIX
-def test_an_interrupt_stops_the_command_and_its_children(tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status')}{os.pathsep}{os.environ['PATH']}")
-    main = threading.get_ident()
-    timer = threading.Timer(0.3, signal.pthread_kill, (main, signal.SIGINT))
+def test_an_interrupt_stops_the_command_and_its_children(tmp_path, monkeypatch, fake_git):
+    monkeypatch.setenv("PATH", f"{fake_git('status')}{os.pathsep}{os.environ['PATH']}")
+    main, done = threading.get_ident(), threading.Event()
+
+    def interrupt():                       # once the sleeper runs (at most 5 s)
+        end = time.monotonic() + 5
+        while _sleeper_pid(tmp_path) is None and time.monotonic() < end:
+            if done.wait(0.05):
+                return
+        if not done.is_set():
+            signal.pthread_kill(main, signal.SIGINT)
+
+    timer = threading.Thread(target=interrupt)
     timer.start()
     try:
         with pytest.raises(KeyboardInterrupt):
             board.run_watched(["git", "status"], str(tmp_path), warn=0.2, kill=10,
                               log=io.StringIO())
     finally:
-        timer.cancel()
-    assert _gone(int((tmp_path / "sleeper").read_text()))
+        done.set()
+        timer.join()
+    assert _gone(_sleeper_pid(tmp_path))
 
 
 @POSIX
-def test_a_child_that_leaves_the_group_leaves_no_pipes_or_zombie(tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status', escape=True)}"
+def test_a_child_that_leaves_the_group_leaves_no_pipes_or_zombie(tmp_path, monkeypatch,
+                                                                 fake_git):
+    monkeypatch.setenv("PATH", f"{fake_git('status', escape=True)}"
                                f"{os.pathsep}{os.environ['PATH']}")
-    try:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", ResourceWarning)
-            with pytest.raises(board.Watchdog) as stopped:
-                board.run_watched(["git", "status"], str(tmp_path), warn=0.5, kill=1,
-                                  log=io.StringIO())
-            del stopped                     # its traceback holds the Popen
-            gc.collect()
-        assert [str(w.message) for w in caught if w.category is ResourceWarning] == []
-    finally:
-        pid_file = tmp_path / "sleeper"
-        if pid_file.exists():
-            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        with pytest.raises(board.Watchdog) as stopped:
+            board.run_watched(["git", "status"], str(tmp_path), warn=0.5, kill=1,
+                              log=io.StringIO())
+        del stopped                         # its traceback holds the Popen
+        gc.collect()
+    pid = _sleeper_pid(tmp_path)
+    assert pid is not None
+    os.kill(pid, 0)                         # still alive: the grace timeout ran out
+    assert [str(w.message) for w in caught if w.category is ResourceWarning] == []
 
 
 def test_watchdog_times_from_arguments_then_environment(monkeypatch):
@@ -634,12 +668,12 @@ def test_no_such_program_raises_oserror_and_git_out_gives_none(tmp_path, monkeyp
 
 @POSIX
 @NEEDS_GIT_2_44
-def test_main_check_hang_shows_a_skip_row(tmp_path):
+def test_main_check_hang_shows_a_skip_row(tmp_path, fake_git):
     main = repos.make(tmp_path)
     wt = _branch(main, tmp_path)
     _start_on_branch(wt)
     env = dict(repos.ENV, STATUS_BOARD_WARN_SECS="0.2", STATUS_BOARD_KILL_SECS="1",
-               PATH=f"{_fake_git(tmp_path, 'ls-tree')}{os.pathsep}{repos.ENV['PATH']}")
+               PATH=f"{fake_git('ls-tree')}{os.pathsep}{repos.ENV['PATH']}")
     p = subprocess.run([sys.executable, SCRIPT, "--root", str(wt)], capture_output=True,
                        text=True, encoding="utf-8", env=env)
     assert p.returncode == 0, p.stderr

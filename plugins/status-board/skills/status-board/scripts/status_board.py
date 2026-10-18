@@ -28,7 +28,8 @@ Security properties (for auditors — each is verifiable against the code below)
     inherited GIT_DIR/GIT_WORK_TREE dropped. Its watchdog prints a "still
     waiting" line to stderr every few seconds (STATUS_BOARD_WARN_SECS,
     default 5) and kills the command at a hard limit (STATUS_BOARD_KILL_SECS,
-    default 60) or on any interrupt — on POSIX with its whole process group,
+    default 60), or on a Ctrl-C or any error while waiting — on POSIX with
+    its whole process group,
     on Windows the command itself only (TerminateProcess). Only positive
     finite numbers are taken from those variables; they change timing only,
     never what runs.
