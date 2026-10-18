@@ -10,16 +10,21 @@ Blocked carries a rule that failed, with why, what is safe, what to avoid and
 the options; render() gives the text form.
 
 Security properties (for auditors; plan_flow.py relies on these):
-  * Read-only. Every subprocess is a git command that reads (Git.run refuses
-    any other, and any --output: see allowed), run through
+  * Read-only. Every subprocess is a git command that reads, in one of the
+    exact argument shapes `allowed` lists (Git.run refuses any other), run
+    through
     status_board.run_watched: a list argv, no shell, no stdin, no prompts,
     GIT_OPTIONAL_LOCKS=0, --no-lazy-fetch, under its watchdog
     (STATUS_BOARD_WARN_SECS / STATUS_BOARD_KILL_SECS, or --warn / --timeout).
     It never fetches, pushes, commits, moves or writes a file; the commands
     that do are only returned, as steps, for Claude to run.
-  * Every git runs with -c core.fsmonitor=false, so a repo's filesystem
-    monitor command never runs; clean filters the repo itself configures can
-    still run under `git status`, as with any `git status`.
+  * No program the repo's config names runs: every git has
+    -c core.fsmonitor=false (no filesystem monitor); `git log` always has
+    --no-show-signature (no gpg.program, which could fetch keys) and never
+    -p/--patch, --ext-diff, --textconv or a signature placeholder in
+    --format; cat-file is only `cat-file blob`, never --textconv/--filters.
+    Clean filters the repo itself configures can still run under
+    `git status`, as with any `git status`.
   * No network, no code execution: files and git objects are read as text.
   * Standard library only (difflib, hashlib, os, shlex, tempfile, time), plus
     the sibling status_board.py and plan_readme.py.
@@ -42,7 +47,15 @@ KINDS = ("active", "next", "backlog", "future-ideas", "done", "wont-do")
 LOCAL, PUSH = 10, 120                 # step time limits, seconds
 CONTEXT = 3                           # lines of context around an edit
 SHOW = 3                              # paths named per list in a fact
-READS = {"rev-parse", "rev-list", "status", "ls-tree", "cat-file", "log"}
+LOG_FORMAT = "--format=%x01%h%x02%P%x02%s"
+# the options each reading command may take (positional arguments are refs,
+# ranges and, after "--", pathspecs)
+FLAGS = {"rev-parse": {"--show-toplevel", "--git-common-dir", "--verify", "--quiet"},
+         "rev-list": {"--count"},
+         "status": {"--porcelain", "--no-renames", "--untracked-files=all",
+                    "--untracked-files=no"},
+         "ls-tree": {"-r", "-z"},
+         "log": {"--no-renames", "--no-show-signature", "--name-only", LOG_FORMAT}}
 NOT_FOUND = 3
 STEPS_HEAD = "Steps — run each alone, in order; stop at the first that fails"
 SLOW = ("local git commands shouldn't take this long — likely a lock, a filesystem "
@@ -61,13 +74,24 @@ class Blocked(Exception):
 
 
 def allowed(args):
-    """True for the git commands the check may run: ones that only read.
-    symbolic-ref only in its one-ref form (with two it moves a ref)."""
-    if not args or any(a.startswith("--output") for a in args):
+    """True for the git commands the check may run, in the shapes it runs
+    them: they only read, and run no program the repo's config names.
+    symbolic-ref only with one ref (with two it moves a ref); cat-file only
+    `blob <object>`; log only with --no-show-signature (else log.showSignature
+    runs gpg.program)."""
+    if not args:
         return False
-    if args[0] == "symbolic-ref":
-        return len(args) == 3 and args[1] == "--quiet" and not args[2].startswith("-")
-    return args[0] in READS or tuple(args[:2]) == ("worktree", "list")
+    cmd, rest = args[0], list(args[1:])
+    if cmd == "symbolic-ref":
+        return len(rest) == 2 and rest[0] == "--quiet" and not rest[1].startswith("-")
+    if cmd == "cat-file":
+        return len(rest) == 2 and rest[0] == "blob" and not rest[1].startswith("-")
+    if cmd == "worktree":
+        return rest == ["list", "--porcelain"]
+    if cmd not in FLAGS or (cmd == "log" and "--no-show-signature" not in rest):
+        return False
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+    return all(a in FLAGS[cmd] for a in opts if a.startswith("-"))
 
 
 class Git:
@@ -137,27 +161,41 @@ def changed(g, path, *args):
 
 
 def commits(g, top, rng):
-    """[(short sha, subject, [paths])] of the commits in `rng`, newest first."""
-    out = g.run(top, "log", "--format=%x01%h %s", "--name-only", rng).stdout
+    """[(short sha, [parents], subject, [paths])] of the commits in `rng`,
+    newest first. Each path is listed as itself (no rename detection: a
+    rename is its old path and its new one); a merge lists none."""
+    out = g.run(top, "log", "--no-renames", "--no-show-signature", LOG_FORMAT,
+                "--name-only", rng).stdout
     res = []
     for chunk in out.split("\x01")[1:]:
         head, *paths = [ln for ln in chunk.splitlines() if ln]
-        sha, _, subject = head.partition(" ")
-        res.append((sha, subject, paths))
+        sha, parents, subject = head.split("\x02", 2)
+        res.append((sha, parents.split(), subject, paths))
     return res
 
 
-def only_own(found, plans, base):
-    """True when every commit in `found` is one of these checks' own: an own
-    subject, and only paths under plans/."""
-    return bool(found) and all(subject in own_subjects(base) and
-                               all(p.startswith(plans + "/") for p in paths)
-                               for _, subject, paths in found)
+def only_own(g, top, found, plans, base, target):
+    """True when every commit in `found` is one this plan redoes: a single
+    parent, an own subject, and only paths the plan changes (`target`: path
+    -> its text after the plan, None for gone), each just as the plan leaves
+    it. None for `target` (the plan could not be worked out): False."""
+    if not found or target is None:
+        return False
+    mine = set(target) & set(guarded_paths(plans, base))
+    for sha, parents, subject, paths in found:
+        if (len(parents) != 1 or subject not in own_subjects(base) or not paths
+                or not set(paths) <= mine):
+            return False
+        for p in paths:
+            got = g.run(top, "cat-file", "blob", f"{sha}:{p}")
+            if (got.stdout if got.returncode == 0 else None) != target[p]:
+                return False
+    return True
 
 
 def listed(found):
     return "; ".join(f"{sha} {subject} ({names(paths) or 'no paths'})"
-                     for sha, subject, paths in found)
+                     for sha, _, subject, paths in found)
 
 
 def mentions(text, stems):
@@ -270,7 +308,7 @@ def survey(g, facts, top, plans, base):
     if not upstream:
         raise Blocked(f"no {on}", f"there is no {on} to compare with",
                       safe=[f"git fetch {REMOTE}"], options=[f"fetch {REMOTE}, then check again"])
-    s = {"main": main, "on": on, "upstream": upstream, "mine": [], "own": False,
+    s = {"main": main, "on": on, "upstream": upstream, "mine": [],
          "local": g(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{main}"),
          "ahead": 0, "behind": 0}
     if s["local"]:
@@ -282,9 +320,7 @@ def survey(g, facts, top, plans, base):
         facts.append(f"local {main}: none; {on} is at {upstream[:7]}")
     if s["ahead"]:
         s["mine"] = commits(g, top, f"{upstream}..{s['local']}")
-        s["own"] = only_own(s["mine"], plans, base)
-        facts.append(f"local {main}'s commits not on {on}: {listed(s['mine'])}"
-                     + (" — only this check's own plans-only commit(s)" if s["own"] else ""))
+        facts.append(f"local {main}'s commits not on {on}: {listed(s['mine'])}")
     s["wts"] = worktrees(g, top)
     checkout_facts(g, facts, s["wts"], plans, guarded_paths(plans, base))
     s["mc"] = next((w for w in s["wts"] if w["branch"] == main), None)
@@ -314,17 +350,31 @@ def blob(g, top, s, rel):
     return g.run(top, "cat-file", "blob", s["tree"][rel][1]).stdout if rel in s["tree"] else None
 
 
-def ahead_rule(s, plans, base):
-    """Blocked when local main has commits origin/main lacks."""
-    main, on, ahead, behind = s["main"], s["on"], s["ahead"], s["behind"]
+def ahead_rule(g, facts, top, s, plans, base, target):
+    """Blocked when local main has commits origin/main lacks; the options
+    differ when they are only this check's own (see only_own; `target` is
+    what the plan makes, or None when it could not be worked out)."""
+    main, on, ahead, behind, mc = s["main"], s["on"], s["ahead"], s["behind"], s["mc"]
     if not ahead:
         return
-    where = s["mc"]["path"] if s["mc"] else f"a checkout of {main}"
-    if s["own"]:
+    if only_own(g, top, s["mine"], plans, base, target):
+        facts.append(f"local {main}'s commits not on {on} are only this check's own, "
+                     f"each just as this plan makes it")
         ask = ["don't rebase, reset or drop the commit without asking the user first",
                "never force-push"]
-        drop = (f"or ask the user, then drop it (git reset --keep {on} in {where}) and "
-                f"check again: this plan redoes it")
+        if mc:
+            drop = f"git reset --keep {on} in {mc['path']}"
+            push = f"from {mc['path']}: git push {REMOTE} HEAD:refs/heads/{main}"
+            rebase = (f"ask the user, then in {mc['path']}: git rebase --no-autostash {on} "
+                      f"(it replays that one plans-only commit on top), then check again")
+        else:
+            drop = f"git branch -f {main} {on}"
+            push = (f"(no checkout has {main}; this names it exactly, from any checkout): "
+                    f"git push {REMOTE} refs/heads/{main}:refs/heads/{main}")
+            rebase = (f"a rebase needs a checkout of {main}, and none has it: ask the user "
+                      f"where to check {main} out, then there: git rebase --no-autostash "
+                      f"{on}, then check again")
+        drop = f"or ask the user, then drop it ({drop}) and check again: this plan redoes it"
         if behind:
             raise Blocked(
                 f"local {main} holds this check's own unpushed commit, and {on} has moved",
@@ -332,17 +382,14 @@ def ahead_rule(s, plans, base):
                 f"{behind} commit(s) local {main} lacks, so the push was rejected as not "
                 f"a fast-forward",
                 safe=[f"see both sides: git log --oneline --left-right {main}...{on}"],
-                avoid=ask,
-                options=[f"ask the user, then in {where}: git rebase {on} (it replays that "
-                         f"one plans-only commit on top), then check again", drop])
+                avoid=ask, options=[rebase, drop])
         raise Blocked(
             f"local {main} holds this check's own unpushed commit",
             f"local {main} has {listed(s['mine'])}, which {on} lacks: its push did not "
             f"go through",
             safe=[f"see it: git show --stat {main}"], avoid=ask,
-            options=[f"read why the push failed; once that is fixed, push it from "
-                     f"{where}: git push {REMOTE} HEAD:refs/heads/{main}, then check again",
-                     drop])
+            options=[f"read why the push failed; once that is fixed, push it {push}, "
+                     f"then check again", drop])
     if behind:
         why = (f"local {main} has {ahead} commit(s) {on} lacks ({listed(s['mine'])}) and "
                f"lacks {behind} of {on}'s; plans-only commits go to {main} alone, so "
@@ -367,12 +414,12 @@ def temp_path(top, base):
                                          f"status-board-{base}-{tag}"))
 
 
-def leftovers(g, facts, s, top, plans, base, temp):
+def leftovers(g, facts, s, top, plans, base, temp, target):
     """Facts on leftover status-board-* worktrees. Returns None, or, when
     `temp` (the one this check would use) is registered and may go,
-    {"own": [shas]}: this check's own unpushed commits it holds, which the
-    plan redoes. Blocked when it holds changes or other commits, or a
-    folder is in its way."""
+    {"own": [shas]}: this check's own unpushed commits it holds, each just
+    as the plan (`target`) makes it, so the plan redoes them. Blocked when it
+    holds changes or other commits, or a folder is in its way."""
     stale = None
     for w in s["wts"]:
         if not os.path.basename(w["path"]).startswith("status-board-"):
@@ -395,7 +442,7 @@ def leftovers(g, facts, s, top, plans, base, temp):
                 avoid=[NEVER, "don't remove it with --force"],
                 options=["keep what is worth keeping, then git worktree remove "
                          f"{shlex.quote(temp)} and check again"])
-        if ahead and not only_own(ahead, plans, base):
+        if ahead and not only_own(g, top, ahead, plans, base, target):
             raise Blocked(
                 f"the temporary worktree {temp} holds commits not on {s['on']}",
                 f"a leftover from an earlier run holds {listed(ahead)}; removing it "
@@ -404,7 +451,7 @@ def leftovers(g, facts, s, top, plans, base, temp):
                 avoid=[NEVER, "don't remove it while it holds those commits"],
                 options=[f"the user decides: keep them on a branch ({look} branch <name>), "
                          f"then git worktree remove {shlex.quote(temp)} and check again"])
-        stale = {"own": [sha for sha, _, _ in ahead]}
+        stale = {"own": [sha for sha, *_ in ahead]}
         if ahead:
             facts.append(f"{temp} holds this check's own unpushed commit(s) "
                          f"{', '.join(stale['own'])}, which this plan redoes")
@@ -460,7 +507,7 @@ def workspace(g, facts, s, top, plans, base, target):
     work = temp or mc["path"]
     facts.append(f"workspace: a temporary worktree {temp}" if temp else
                  f"workspace: the {s['main']} checkout {work}")
-    stale = leftovers(g, facts, s, top, plans, base, temp)
+    stale = leftovers(g, facts, s, top, plans, base, temp, target)
     return {"mc": mc, "busy": bool(busy), "temp": temp, "work": work, "stale": stale}
 
 

@@ -42,11 +42,55 @@ from plan_check import (NEVER, NOT_FOUND, REMOTE, SLOW, TERMINAL, Blocked, Git,
                         leave_steps, mentions, move_steps, moves_to, plan_base,
                         publish_steps, render, run_step, survey, workspace)
 
+
 def finish(g, facts, top, plans, base, wont_do):
     """(outcome, steps) for finishing plan `base` on main."""
     s = survey(g, facts, top, plans, base)
+    # the ahead rule goes first, but tells this check's own commits apart only
+    # by what the plan makes; a rule failing on the way waits until after it
+    try:
+        goal, later = finish_goal(g, facts, top, plans, base, wont_do, s), None
+    except Blocked as e:
+        goal, later = None, e
+    ahead_rule(g, facts, top, s, plans, base, goal and goal["target"])
+    if later:
+        raise later
+    to, plan, drops, new = goal["to"], goal["plan"], goal["drops"], goal["new"]
+    on, found, text, readme = s["on"], s["found"], s["text"], s["readme"]
+    stems = {sb.stem(f) for _, f in found}
+    w = workspace(g, facts, s, top, plans, base, goal["target"])
+
+    change = bool(plan or drops or new != text)
+    steps = enter_steps(s, w, top, change)
+    if change:
+        touched = []
+        steps += move_steps(w["work"], s["tree"], plan, drops, touched)
+        if new != text:
+            review = (f"re-read the {to} section and the next list: the note for {base} "
+                      f"should describe it as {'done' if to == 'done' else 'dropped'}, "
+                      f"and no item for it should be left in the next list")
+            if not plan_readme.find_notes(text, stems):
+                review += "; the note was made up from the plan's title — reword it if needed"
+                for stem in sorted(mentions(text, stems)):
+                    review += f"; {stem} is also named outside a list note — check that entry"
+            steps += hunks(w["work"], readme, text, new, review)
+            steps.append(run_step(w["work"], ["git", "add", "--", readme], f"{readme} staged"))
+            touched.append(readme)
+        word = "done" if to == "done" else "won't do"
+        steps += publish_steps(s, w, top, f"Plans: {base} {word}", touched)
+    steps += leave_steps(s, w, top, change)
+    if not steps:
+        facts.append(f"{base} is in {to}/ on {on} with its note and no tracker")
+        return "done", []
+    return "plan", steps
+
+
+def finish_goal(g, facts, top, plans, base, wont_do, s):
+    """What finishing makes of origin/main: {to, plan, drops, new, target},
+    `target` mapping each path it changes to its text after (None: gone).
+    Blocked when the plan is not there, the README cannot take its note, or a
+    copy to drop differs."""
     main, on, found, text, readme = s["main"], s["on"], s["found"], s["text"], s["readme"]
-    ahead_rule(s, plans, base)
     if not found:
         raise Blocked(f"{base} is not on {on}",
                       f"has its branch been merged? fetch first: {on} is as last "
@@ -78,31 +122,7 @@ def finish(g, facts, top, plans, base, wont_do):
     target = {src: None for _, src, _ in plan} | {p: None for p in drops}
     target |= {dst: blob(g, top, s, src) for how, src, dst in plan if how == "mv"}
     target[readme] = new
-    w = workspace(g, facts, s, top, plans, base, target)
-
-    change = bool(plan or drops or new != text)
-    steps = enter_steps(s, w, top, change)
-    if change:
-        touched = []
-        steps += move_steps(w["work"], s["tree"], plan, drops, touched)
-        if new != text:
-            review = (f"re-read the {to} section and the next list: the note for {base} "
-                      f"should describe it as {'done' if to == 'done' else 'dropped'}, "
-                      f"and no item for it should be left in the next list")
-            if not plan_readme.find_notes(text, stems):
-                review += "; the note was made up from the plan's title — reword it if needed"
-                for stem in sorted(mentions(text, stems)):
-                    review += f"; {stem} is also named outside a list note — check that entry"
-            steps += hunks(w["work"], readme, text, new, review)
-            steps.append(run_step(w["work"], ["git", "add", "--", readme], f"{readme} staged"))
-            touched.append(readme)
-        word = "done" if to == "done" else "won't do"
-        steps += publish_steps(s, w, top, f"Plans: {base} {word}", touched)
-    steps += leave_steps(s, w, top, change)
-    if not steps:
-        facts.append(f"{base} is in {to}/ on {on} with its note and no tracker")
-        return "done", []
-    return "plan", steps
+    return {"to": to, "plan": plan, "drops": drops, "new": new, "target": target}
 
 
 def recheck(args):

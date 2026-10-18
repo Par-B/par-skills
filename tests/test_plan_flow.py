@@ -318,8 +318,55 @@ def test_an_own_commit_after_main_moved_offers_a_rebase_with_the_users_ok(tmp_pa
     assert rc == 5 and "has moved" in res["blocked"]["rule"], res
     assert "not a fast-forward" in res["blocked"]["why"]
     options = " ".join(res["blocked"]["options"])
-    assert "git rebase origin/main" in options and "ask the user" in options
+    assert "git rebase --no-autostash origin/main" in options and "ask the user" in options
     assert any("without asking" in a for a in res["blocked"]["avoid"])
+
+
+def test_with_main_checked_out_nowhere_the_options_name_exact_refs(tmp_path):
+    main = _rejected_push_from_the_main_checkout(tmp_path)
+    git(main, "switch", "-q", "-c", "other-work")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "this check's own unpushed commit" in res["blocked"]["rule"], res
+    options = " ".join(res["blocked"]["options"])
+    assert "git push origin refs/heads/main:refs/heads/main" in options
+    assert "HEAD:refs/heads/main" not in options
+    assert "git branch -f main origin/main" in options and "reset" not in options
+    (tmp_path / "origin.git/hooks/pre-receive").unlink()
+    other = repos.clone(tmp_path, "other")
+    repos.write(other, "src2.txt", "theirs\n")
+    repos.commit_all(other, "pushed elsewhere")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    options = " ".join(res["blocked"]["options"])
+    assert "needs a checkout of main" in options, options
+    assert "git rebase --no-autostash origin/main" in options
+
+
+@POSIX
+def test_reading_commits_never_runs_the_signature_program(tmp_path):
+    main = _active_thing(tmp_path)
+    marker = tmp_path / "verified"
+    fake = tmp_path / "fakegpg"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'case "$*" in *--verify*) touch \'{marker}\'; exit 1;; esac\n'
+        "cat >/dev/null\n"
+        'echo "[GNUPG:] SIG_CREATED D 1 8 00 1 0" >&2\n'
+        "printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nfake\\n-----END PGP SIGNATURE-----\\n'\n",
+        encoding="utf-8")
+    fake.chmod(0o755)
+    git(main, "config", "gpg.program", str(fake))
+    git(main, "config", "log.showSignature", "true")
+    repos.write(main, "src.txt", "local\n")
+    git(main, "add", "src.txt")
+    git(main, "commit", "-q", "-S", "-m", "signed, local only")
+    git(main, "log", "-1")
+    assert marker.exists(), "the probe's fake gpg is not reached; the test proves nothing"
+    marker.unlink()
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "signed, local only" in "\n".join(res["facts"]), res
+    assert not marker.exists()
 
 
 @POSIX
@@ -486,7 +533,16 @@ def test_the_script_runs_only_reading_git_commands(tmp_path):
             reader.run(str(tmp_path), *args)
     for args in (("symbolic-ref", "HEAD", "refs/heads/x"), ("symbolic-ref", "HEAD"),
                  ("show-ref", "main"), ("log", "--output=x", "HEAD"),
-                 ("rev-list", "--output", "x")):
+                 ("rev-list", "--output", "x"),
+                 ("log", "--no-show-signature", "-p", "HEAD"),
+                 ("log", "--no-show-signature", "--patch", "HEAD"),
+                 ("log", "--no-show-signature", "--ext-diff", "HEAD"),
+                 ("log", "--no-show-signature", "--textconv", "HEAD"),
+                 ("log", "--show-signature", "HEAD"), ("log", "--name-only", "HEAD"),
+                 ("log", "--no-show-signature", "--format=%G?", "HEAD"),
+                 ("cat-file", "--textconv", "HEAD:x"), ("cat-file", "--filters", "HEAD:x"),
+                 ("status", "--porcelain", "--ignore-submodules=none"),
+                 ("worktree", "list"), ("ls-tree", "--format=x", "HEAD")):
         with pytest.raises(AssertionError):
             reader.run(str(tmp_path), *args)
 
@@ -539,6 +595,54 @@ def test_finish_redoes_a_commit_a_temporary_worktree_did_not_push(tmp_path):
     assert seen == ["plan", "done"], res
     assert f"plans/done/{THING}.md" in repos.origin_files(main)
     assert not os.path.exists(temp)
+
+
+def _other_plan(temp):
+    repos.plan(temp, "backlog/2026-01-09-unrelated")
+    git(temp, "add", "plans")
+
+
+def _rename_into_plans(temp):
+    git(temp, "mv", "src.txt", "plans/src.txt")
+
+
+def _other_readme(temp):
+    repos.write(temp, "plans/README.md", "# Plans, rewritten by hand\n")
+    git(temp, "add", "plans/README.md")
+
+
+@pytest.mark.parametrize("change", [_other_plan, _rename_into_plans, _other_readme])
+def test_an_own_subject_alone_does_not_make_a_commit_this_checks_own(tmp_path, change):
+    main = _active_thing(tmp_path)
+    git(main, "switch", "-q", "-c", "other-work")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    temp = next(s for s in res["steps"] if s["argv"][1:3] == ["worktree", "add"])["argv"][4]
+    git(main, "worktree", "add", "-q", "--detach", temp, "origin/main")
+    try:
+        change(temp)
+        git(temp, "commit", "-q", "-m", f"Plans: {BASE} done")
+        rc, res = repos.check(FLOW, main, "finish", THING)
+        assert rc == 5 and res["steps"] == [], res
+        assert "holds commits not on origin/main" in res["blocked"]["rule"]
+    finally:
+        git(main, "worktree", "remove", "--force", temp)
+
+
+def test_a_merge_is_never_this_checks_own(tmp_path):
+    main = _active_thing(tmp_path)
+    repos.write(main, "src.txt", "edited\n")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    temp = res["steps"][0]["argv"][4]
+    upto = next(i for i, s in enumerate(res["steps"]) if s.get("argv", [])[:2] == ["git", "push"])
+    assert repos.execute(res["steps"][:upto]) is None
+    try:
+        own = git(temp, "rev-parse", "HEAD")
+        git(temp, "checkout", "-q", "--detach", "origin/main")
+        git(temp, "merge", "-q", "--no-ff", "-m", f"Plans: {BASE} done", own)
+        rc, res = repos.check(FLOW, main, "finish", THING)
+        assert rc == 5 and "holds commits not on origin/main" in res["blocked"]["rule"], res
+    finally:
+        git(main, "worktree", "remove", "--force", temp)
 
 
 def test_finish_blocks_on_a_leftover_temporary_worktree_with_other_commits(tmp_path):
