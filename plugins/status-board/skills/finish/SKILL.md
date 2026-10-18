@@ -1,27 +1,42 @@
 ---
 name: finish
-description: Use after a plan's branch has been merged into main — a pull request merged, or the branch merged by hand — or when the user says a plan is finished, shipped or dropped; do not move the plan to done/ on the branch. Moves the plan to done/ (or wont-do/) on main, removes its *.tasks.json trackers and moves its note to that section, as a pushed plans-only commit.
+description: Use after a plan's pull request(s) are merged into main, or when the user explicitly says a plan is finished or dropped; do not move the plan to done/ on the branch. Moves the plan to done/ (or wont-do/) on main, removes its *.tasks.json trackers and moves its note to that section, as a pushed plans-only commit.
 ---
 
 # Finish a plan on main
 
-A plan is marked done only after the merge, and finish is what does it: on
-`main`, once the plan's branch is merged (a pull request merged, or merged by
-hand). The branch never moves its plan to `done/`; while the work is there it
-stays in `active/`. The check reads only: files in `done/` (or `wont-do/`),
-no `*.tasks.json` tracker, its note in that section, off the next list — and
-says what to do for what is missing, usually the move itself; you run each
-step. A pull request merged on GitHub leaves the local `main` behind; the
-plan brings it level. With nothing missing there is nothing to commit.
+A plan is marked done only after the merge, and finish is what does it, on
+`main` — and only when every pull request for the plan is merged, or the user
+says in so many words that it is finished. The branch never moves its plan to
+`done/`; while the work is there it stays in `active/`. Never start a finish
+on your own before the merge is confirmed. The check reads only: files in
+`done/` (or `wont-do/`), no `*.tasks.json` tracker, its note in that section,
+off the next list — and says what to do for what is missing, usually the move
+itself; you run each step. A pull request merged on GitHub leaves the local
+`main` behind; the plan brings it level. Nothing missing, nothing to commit.
 
-## 1. Name the plan
+## 1. Name the plan and its branches
 
 Match the user's words to a plan file (slug or title; `/status-board:status-board`
 lists them). Ambiguous → ask. Pass its filename or slug: the pair
-(`<date>-<slug>-design.md` and `-plan.md`) is checked together. Add
-`--wont-do` when the plan was dropped rather than shipped.
+(`<date>-<slug>-design.md` and `-plan.md`) is checked together. Its branches:
+the default name (the slug without its date and `-design`/`-plan`, always
+included), plus each one the user names or the plan's pull requests use —
+`--branch <name>` for each extra one.
 
-## 2. Fetch, then check
+## 2. Is it finished?
+
+- `gh` available → for each branch, one call (a read):
+  `gh pr list --head <branch> --state all --json number,state,url`.
+  Every PR merged → add `--prs-merged`. Any still open, or closed without
+  merging (that may mean won't do, or a dropped feature) → stop and ask the
+  user. No `gh` → the check proves the merge locally, from git.
+- `--confirm` only when the user has said in so many words that the plan is
+  finished (with `--wont-do`: dropped) — never inferred from a workflow (a
+  merge script, a finishing skill, "the tests pass"). `--wont-do` needs
+  `--confirm`.
+
+## 3. Fetch, then check
 
 1. `git fetch origin` — its own Bash call, timeout 120 s. It fails → report
    git's message and stop. The check never fetches: it compares with
@@ -32,19 +47,23 @@ lists them). Ambiguous → ask. Pass its filename or slug: the pair
    pipes (the plugin's hook auto-approves exactly this shape):
 
    ```bash
-   python3 "<skill-dir>/../status-board/scripts/plan_flow.py" check finish <plan>
+   python3 "<skill-dir>/../status-board/scripts/plan_flow.py" check finish <plan> [--branch <name>]… [--prs-merged] [--confirm] [--wont-do]
    ```
 
    `command not found` → retry once with `python`, and use `python` for the
    rechecks too (they are printed with `python3`). `--json` prints the same
    as one object, if that is easier to follow; the text form is enough.
 
-## 3. Act on its first line
+## 4. Act on its first line
 
-- `PLAN (n steps)` → **Carry out the plan** below. Facts showing the plan
-  on `origin/main` anywhere but `active/` (`backlog/`, `future-ideas/`:
-  never started) → confirm with the user that it is finished before running
-  the steps.
+- `PLAN (n steps)` → **Carry out the plan** below. First relay a fact that
+  tasks are not completed ("N of M tasks not completed", from the tracker).
+  Facts showing the plan on `origin/main` anywhere but `active/` (`backlog/`,
+  `future-ideas/`: never started) → confirm with the user that it is
+  finished before running the steps.
+- `BLOCKED` because a branch isn't proven merged → relay it with each branch
+  and what is missing, and ask the user: merge it, or say it is finished
+  (then `--confirm`).
 - `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
   work around it: never reset, stash, rebase, force-push, drop a commit or
   delete a copy that differs. An option that names such a command is for the
@@ -102,8 +121,8 @@ carried-out plan → stop and report the last facts.
 
 ## Without Python
 
-The check needs Python 3 and git 2.44 or later. Without them, do it by hand:
-`git fetch origin`; in a checkout of `main` brought level with
+The check needs Python 3 and git 2.44 or later. Without them, do it by hand,
+and only once step 2 says it is finished: `git fetch origin`; in a checkout of `main` brought level with
 `git merge --ff-only --no-autostash origin/main`, `git mv`
 any of the plan's files not yet in `plans/done/` there, `git rm` its
 `*.tasks.json`, move its note in `plans/README.md` to the top of the done

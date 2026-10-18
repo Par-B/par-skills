@@ -31,7 +31,7 @@ Update later with `/plugin marketplace update par-plugins`.
 |---|---|---|
 | `status-board` | `/status-board:status-board` (or "show me the status") | Renders a project's `plans/` directory as a single lifecycle status board (in flight, next in order, designed-not-started, future ideas, last-2-done, last-2-won't-do). Bootstraps the `plans/` convention if missing. Fast bundled Python scanner with a portable Glob/Read fallback (Linux/macOS/Windows). |
 | `status-board` | `/status-board:start` (or "start the search plan") | Starts a plan on `main`: after a `git fetch`, a read-only check works out what it takes and Claude runs each step itself — move the plan's files from `backlog/` to `active/`, move its README note and take it off the next list, commit just that and push it; then make the plan's branch from that commit, or bring an existing one up to level (merge `main`, fast-forward to its remote, both, or neither — you pick; never a rebase). Leaves the worktree to your worktree tool. |
-| `status-board` | `/status-board:finish` (or "I merged the search branch") | After a plan's branch is merged (the branch never moves it to `done/`): fetches, checks on `origin/main` that the plan is in `done/` (or `wont-do/`) with no `*.tasks.json` tracker and its note under done, and Claude runs the steps that move it there — a plans-only commit, pushed (none when nothing is missing). |
+| `status-board` | `/status-board:finish` (or "I merged the search branch") | After every PR for a plan is merged, or you say it is finished (the branch never moves it to `done/`): fetches, checks on `origin/main` that the plan is in `done/` (or `wont-do/`) with no `*.tasks.json` tracker and its note under done, and Claude runs the steps that move it there — a plans-only commit, pushed (none when nothing is missing). |
 | `my-commits` | `/my-commits:my-commits` (or "how many commits today?") | Reports your commits in the current repo for a time window — today, yesterday, this week/month, the past N days/weeks/months, or a named month ("October", "October 2024") — as a table (per-commit for a single day, per-day otherwise) with 🟢 lines added / 🔴 lines deleted. |
 | `md-optimize` | `/md-optimize:md-optimize` (or "optimize my CLAUDE.md") | Analyzes an AI-instructions file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`, global or project — plus any files it `@imports`) against the **current session** and interactively improves it through four lenses — effectiveness (contradictions, vague/inaccurate rules, gaps the session exposed), token efficiency (verbosity, redundancy, dead rules), cross-file overlap (a project or imported file duplicating/conflicting with a global one), and privacy (secrets, confidential info, and personal names/contact — including your own — flagged by exposure). Also scans a repo for **skill files** (`SKILL.md`) and optimizes chosen ones with a skill-authoring lens (`description`-as-triggers, no `@`-imports, concise body). Proposes changes one at a time; applies only the ones you approve, with a keep/redact/move/delete/acknowledge menu for privacy findings. **Snapshots every run before editing**, so you can undo/revert later ("undo my last md-optimize") and prune old history ("keep the last 10"). Ships snapshot/undo/prune and `@import`-resolver scripts; only its safe commands auto-approve (a scoped hook) — `restore`/`prune` always prompt, and edits are guarded to resolved `.md` files only. |
 
@@ -133,6 +133,16 @@ pushed plans-only commit. Nothing missing, no commit.
 `--wont-do` files it under won't-do instead. A plan not on `origin/main` exits
 3: has its branch been merged? Fetch first.
 
+A plan may be marked done only when every pull request for it is merged, or
+you say so. Claude looks the plan's PRs up with `gh` (one `gh pr list --head
+<branch>` per branch: the default name plus each `--branch NAME`) and passes
+`--prs-merged` when all are merged; an open PR, or one closed without merging,
+means it asks you. `--confirm` is your explicit word, never inferred from a
+workflow; `--wont-do` needs it. Without either, the check plans the move only
+when every branch is proven merged into `origin/main` locally, and otherwise
+stops, listing each branch and what is missing. Unfinished tasks in the
+plan's tracker show as a fact ("3 of 14 tasks not completed").
+
 Rendered on a branch or in a worktree, the board also compares with
 `origin/main` (as last fetched; origin/HEAD's branch, else `origin/main`, else
 `origin/master`) and flags under ⚠️ Drift a plan that is active here but still
@@ -164,8 +174,9 @@ To have every plan-running skill use them, add to your global `CLAUDE.md`:
 
 > Before executing a plan, start it with `/status-board:start`. Don't move a
 > plan to `done/` on its branch: after merging the branch, run
-> `/status-board:finish`, which moves it on `main`. Plans-only commits go
-> straight to `main` and are pushed.
+> `/status-board:finish`, which moves it on `main`. Only mark a plan done when
+> every PR for it is merged, or I say so. Plans-only commits go straight to
+> `main` and are pushed.
 
 ### Try it
 
