@@ -169,8 +169,11 @@ merge.
 says so, or when every PR for the plan is merged. `check finish` gates the move: without
 `--confirm` (the user's explicit word) or `--prs-merged` (Claude has looked the PRs up with
 `gh` and every one is merged), it plans the move only when every branch of the plan (the
-default name, plus each `--branch`, repeatable) is proven merged into `origin/main` locally
-(its tip is in `origin/main`, or its upstream is gone after a merge); otherwise Blocked, listing
+default name, or the `--branch` names when given, repeatable) is proven merged into
+`origin/main` locally — its tip holds work made after the plan's start (it contains the start
+commit and is past it) and is in `origin/main`. A deleted upstream is not proof: GitHub also
+deletes a branch when its PR is closed unmerged; a squash- or rebase-merged branch needs
+`--prs-merged` (Claude checked with `gh`) or `--confirm`. Otherwise Blocked, listing
 each branch and what is missing. The plan's tracker is read too: unfinished tasks are a fact
 ("3 of 14 tasks not completed"). A PR closed without merging, or still open, is not done:
 ask the user. `--wont-do` needs `--confirm`. Claude never infers `--confirm` from a workflow
