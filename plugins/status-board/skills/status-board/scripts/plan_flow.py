@@ -147,7 +147,7 @@ def start(g, facts, top, plans, base, name, sync):
     s = survey(g, facts, top, plans, base)
     main = s["main"]
     name = name or sb.DATE_RE.sub("", base)
-    if g(top, "check-ref-format", "--branch", name) != name:
+    if name.startswith("-") or g(top, "check-ref-format", "--branch", name) != name:
         raise Blocked(f"{name!r} is not a valid branch name",
                       "git check-ref-format --branch refuses it",
                       options=["name the branch with --branch NAME"])
@@ -230,9 +230,11 @@ def start_goal(g, facts, top, plans, base, s, b):
 
 
 def bring_source(g, facts, top, plans, base, s, b):
-    """Where a plan that is not on main yet comes from: this checkout's last
-    commit, else its branch's, else the remote branch's. Blocked for an
-    uncommitted draft or a plan already ended there; no such plan: exit 3."""
+    """Where a plan that is not on main yet comes from: of its branch, the
+    remote branch and this checkout's last commit (that order), the one
+    holding it — when they hold different copies, the one whose commit
+    contains the others'. Blocked for an uncommitted draft, copies none of
+    which is the newest, or a plan already ended there; no such plan: exit 3."""
     here = find_pair(lambda p: os.path.isfile(os.path.join(top, p)), plans, base)
     drafts = changed(g, top, "--untracked-files=all", "--",
                      *[f"{plans}/{st}/{f}" for st, f in here]) if here else []
@@ -245,30 +247,57 @@ def bring_source(g, facts, top, plans, base, s, b):
                       options=["commit it on a branch, or push it to main, then check "
                                "again"])
     head = g(top, "rev-parse", "--verify", "--quiet", "HEAD")
-    for label, sha in (("this checkout", head), (f"branch {b['name']}", b["local"]),
-                       (f"{REMOTE}/{b['name']}", b["remote"])):
-        if not sha:
+    held, seen = [], set()
+    for label, sha in ((f"branch {b['name']}", b["local"]),
+                       (f"{REMOTE}/{b['name']}", b["remote"]), ("this checkout", head)):
+        if not sha or sha in seen:
             continue
+        seen.add(sha)
         tree = tree_of(g, top, sha, plans)
         got = find_pair(tree.__contains__, plans, base)
         if got:
-            break
-    else:
+            pick = {}
+            for st, f in got:             # STATES order: the copy nearest active
+                pick.setdefault(f, st)
+            pick = [(st, f) for f, st in pick.items()]
+            copy = tuple(sorted((f, st, tree[f"{plans}/{st}/{f}"][1]) for st, f in pick))
+            held.append({"label": label, "sha": sha, "tree": tree, "got": got,
+                         "pick": pick, "copy": copy})
+    if not held:
         raise Blocked(f"no plan {base}",
                       f"it is not on {s['on']}, in this checkout's last commit or on "
                       f"branch {b['name']}",
                       safe=["check the plan's name", f"git fetch {REMOTE}"],
                       options=["name the plan as its file is named, then check again"],
                       code=NOT_FOUND)
+
+    def contains(x, y):
+        return x is y or int(g(top, "rev-list", "--count", f"{x['sha']}..{y['sha']}") or 0) == 0
+    if len({h["copy"] for h in held}) == 1:
+        src = held[0]
+    else:
+        newest = [x for x in held if all(contains(x, y) for y in held)]
+        if not newest:
+            where = "; ".join(f"{h['label']} ({h['sha'][:7]}): "
+                              f"{names([f'{plans}/{st}/{f}' for st, f in h['pick']])}"
+                              for h in held)
+            raise Blocked(
+                f"{base} has different copies, and none is the newest",
+                f"{where}; none of these commits contains the others, so the check "
+                f"cannot tell which copy is the plan",
+                safe=[f"compare: git diff {held[0]['sha'][:7]} {held[1]['sha'][:7]} -- {plans}"],
+                avoid=[NEVER, "don't pick a copy for the user"],
+                options=["the user picks: name the plan's branch with --branch NAME, or "
+                         "check out the commit with the right copy and check again from "
+                         "there", "or make the copies the same, then check again"])
+        src = newest[0]
+    label, sha, tree, got, pick = (src["label"], src["sha"], src["tree"], src["got"],
+                                   src["pick"])
     ended = [f"{plans}/{st}/{f}" for st, f in got if st in TERMINAL]
     if ended:
         raise Blocked(f"{ended[0]} is already ended in {label}",
                       "a finished plan does not start again",
                       options=["start a new plan instead"])
-    pick = {}
-    for st, f in got:                     # STATES order: the copy nearest active
-        pick.setdefault(f, st)
-    pick = [(st, f) for f, st in pick.items()]
     readme = text_of(g, top, tree, f"{plans}/README.md")
     notes = plan_readme.find_notes(readme, {sb.stem(f) for _, f in pick}) if readme else []
     label = f"{label} ({sha[:7]})"
@@ -318,9 +347,13 @@ def branch_phase(g, facts, top, plans, base, s, b, sync):
         if b["remote"]:
             return "plan", [run_step(top, ["git", "branch", "--track", name, f"{REMOTE}/{name}"],
                                      f"{name} at {REMOTE}/{name}, tracking it")], None
-        return "plan", [run_step(top, ["git", "branch", name, on],
+        # --no-track: with origin/main as its upstream, a plain push could go to main
+        return "plan", [run_step(top, ["git", "branch", "--no-track", name, on],
                                  f"{name} at {on} ({s['upstream'][:7]}), with the plan "
-                                 f"active; no worktree yet")], None
+                                 f"active and no upstream; no worktree yet")], None
+    btree = tree_of(g, top, b["local"], plans)
+    if not find_pair(btree.__contains__, plans, base):
+        facts.append(f"{name} doesn't hold the plan — is it the plan's branch? (--branch NAME)")
     bc = b["bc"]
     if bc and bc["missing"]:
         raise Blocked(f"the checkout of {name} is missing",
@@ -337,12 +370,12 @@ def branch_phase(g, facts, top, plans, base, s, b, sync):
                       options=[f"the user decides: finish it (resolve, git add, git commit) "
                                f"or abort it (git merge --abort) in {bc['path']}, then check "
                                f"again"])
-    diverged = b["ours"] and b["theirs"]
+    diverged, left = b["ours"] and b["theirs"], []
     if diverged and sync in ("merge", "none"):
         # the answer leaves the remote alone (a merge of main may be what split them)
         facts.append(f"{name} and {REMOTE}/{name} have diverged ({b['ours']} and "
                      f"{b['theirs']} commit(s)); left as they are (--sync {sync})")
-        b = dict(b, theirs=0)
+        b, left = dict(b, theirs=0), ["remote"]
     elif diverged:
         raise Blocked(f"{name} has diverged from {REMOTE}/{name}",
                       f"{name} has {b['ours']} commit(s) {REMOTE}/{name} lacks, and lacks "
@@ -361,19 +394,37 @@ def branch_phase(g, facts, top, plans, base, s, b, sync):
         todo = [k for k in ("remote", "merge") if need[k] and k in chosen]
         if todo:
             facts.append(f"phase B: bring {name} up to level (--sync {sync})")
+            dirt = (changed(g, bc["path"], "--untracked-files=all")
+                    if bc and os.path.realpath(bc["path"]) != branch_temp(top, base) else [])
+            if dirt:
+                facts.append(f"{name}'s checkout {bc['path']} has uncommitted changes "
+                             f"({names(dirt)}); the merge keeps them, or refuses if it "
+                             f"would touch them")
             return "plan", sync_steps(top, s, b, base, todo), None
+        left += [k for k in ("remote", "merge") if need[k]]
         if need["merge"]:
-            facts.append(f"{name} is left as it is (--sync {sync}): it lacks {on}'s start "
-                         f"commit {started[:7]}; the board on {main} shows the plan active, "
-                         f"and {name} sees it once {main} is merged into it")
+            facts.append(f"{name} is left as it is (--sync {sync}): it lacks {on}'s latest "
+                         f"change to the plan ({started[:7]}); the board on {main} shows "
+                         f"the plan active, and {name} sees it once {main} is merged into it")
         if need["remote"]:
             facts.append(f"{name} is left {b['theirs']} commit(s) behind {REMOTE}/{name} "
                          f"(--sync {sync})")
     if not lacks:
-        facts.append(f"{name} has {on}'s start commit {started[:7]}")
-        steps = copy_steps(g, facts, top, plans, base, s, b)
+        facts.append(f"{name} has {on}'s latest change to the plan ({started[:7]})")
+        steps = copy_steps(g, facts, top, plans, base, s, b, btree, sync if left else None)
         if steps:
             return "plan", steps, None
+    if bc and os.path.realpath(bc["path"]) == branch_temp(top, base):
+        loose = changed(g, bc["path"], "--untracked-files=all")
+        if not loose:
+            facts.append(f"the temporary checkout of {name} at {bc['path']} is left from an "
+                         f"earlier step; it goes")
+            return "plan", [run_step(top, ["git", "worktree", "remove", bc["path"]],
+                                     f"{bc['path']} is gone")], None
+        facts.append(f"the temporary checkout of {name} at {bc['path']} has uncommitted "
+                     f"changes ({names(loose)}), so it stays: keep what is worth keeping, "
+                     f"then git worktree remove {shlex.quote(bc['path'])}")
+        bc = "temp"
     if not b["remote"]:
         facts.append(f"{name} is not pushed ({REMOTE} has no {name}); the checks never push it")
     elif b["ours"]:
@@ -387,7 +438,7 @@ def sync_question(s, b, started, need):
     name, on = b["name"], s["on"]
     why = []
     if need["merge"]:
-        why.append(f"lacks {on}'s start commit {started[:7]}")
+        why.append(f"lacks {on}'s latest change to the plan ({started[:7]})")
     if need["remote"]:
         why.append(f"is {b['theirs']} commit(s) behind {REMOTE}/{name}")
     same = "nothing is pushed, and main stays as it is"
@@ -413,9 +464,14 @@ def sync_question(s, b, started, need):
             "options": options}
 
 
+def branch_temp(top, base):
+    """Where a temporary checkout of the plan's branch goes."""
+    return temp_path(top, f"{base}-branch")
+
+
 def branch_workspace(top, b, base):
     """(directory, temporary worktree or None) for work on the plan's branch."""
-    temp = temp_path(top, f"{base}-branch")
+    temp = branch_temp(top, base)
     bc = b["bc"]
     if bc:
         return bc["path"], temp if os.path.realpath(bc["path"]) == temp else None
@@ -445,10 +501,11 @@ def sync_steps(top, s, b, base, todo):
     work, temp = branch_workspace(top, b, base)
     steps = []
     if "remote" in todo:
-        steps.append(run_step(work, ["git", "merge", "--ff-only", f"{REMOTE}/{name}"],
+        steps.append(run_step(work, ["git", "merge", "--ff-only", "--no-autostash",
+                                     f"{REMOTE}/{name}"],
                               f"{name} at {REMOTE}/{name} ({b['remote'][:7]})"))
     if "merge" in todo:
-        steps.append(run_step(work, ["git", "merge", "--no-edit", "-m",
+        steps.append(run_step(work, ["git", "merge", "--no-edit", "--no-autostash", "-m",
                                      f"Merge {s['main']} into {name}", on],
                               f"{name} has {on} ({s['upstream'][:7]}) merged in, its own "
                               f"commits kept, not pushed; on a conflict stop: the next "
@@ -456,12 +513,13 @@ def sync_steps(top, s, b, base, todo):
     return around(top, b, base, work, temp, steps)
 
 
-def copy_steps(g, facts, top, plans, base, s, b):
-    """Phase C's steps: the branch's own copy of the plan to active/ and its
-    README note too, committed on the branch and not pushed; none when there
-    is nothing to move or its checkout has uncommitted changes to them."""
+def copy_steps(g, facts, top, plans, base, s, b, tree, leave):
+    """Phase C's steps: the branch's own copy of the plan (`tree`, the
+    branch tip's) to active/ and its README note too, committed on the
+    branch and not pushed; none when there is nothing to move, its checkout
+    has uncommitted changes to them, or the user's answer (`leave`, a --sync
+    value) leaves the branch as it is."""
     name, readme = b["name"], s["readme"]
-    tree = tree_of(g, top, b["local"], plans)
     found = find_pair(tree.__contains__, plans, base)
     plan, _ = moves_to(tree, [(st, f) for st, f in found if st not in TERMINAL], plans,
                        "active", name, f"on {name}")
@@ -470,6 +528,11 @@ def copy_steps(g, facts, top, plans, base, s, b):
     new = (noted(text, stems, "active", [], readme, name)
            if text and plan_readme.has_section(text, "active") else text)
     if not plan and new == text:
+        return []
+    if leave:
+        facts.append(f"{name}'s own copy of the plan "
+                     f"({names([src for _, src, _ in plan]) or readme}) stays as it is — you "
+                     f"chose to leave the branch (--sync {leave})")
         return []
     bc = b["bc"]
     if bc and bc["guarded"]:
@@ -558,8 +621,8 @@ def main():
         if outcome == "plan":
             steps.append(recheck(args))
     except sb.Watchdog as e:
-        blocked = Blocked(f"`{shlex.join(e.argv)}` did not answer",
-                          f"{e}; {SLOW}",
+        blocked = Blocked(f"`{sb.short_cmd(e.argv)}` did not answer",
+                          f"{e}; {SLOW}", command=e.argv,
                           safe=[f"run it yourself in {e.cwd} to see whether it hangs",
                                 "raise the limit with --timeout S (or "
                                 f"{sb.KILL_ENV}) and check again"],

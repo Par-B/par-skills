@@ -75,8 +75,12 @@ def test_phase_b_makes_a_missing_branch_from_main(tmp_path):
     main = repos.make(tmp_path)
     repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
     _, res = repos.check(FLOW, main, "start", THING)
-    assert _runs(res) == [["git", "branch", "thing", "origin/main"]], res
+    assert _runs(res) == [["git", "branch", "--no-track", "thing", "origin/main"]], res
     assert res["steps"][-1]["kind"] == "recheck"
+    repos.execute(res["steps"])
+    unset = subprocess.run(["git", "-C", str(main), "config", "branch.thing.merge"],
+                           capture_output=True, env=repos.ENV)
+    assert unset.returncode == 1, unset.stdout   # no upstream: a plain push can't hit main
 
 
 def test_start_from_worktree_while_main_checkout_is_elsewhere(tmp_path):
@@ -434,3 +438,177 @@ def test_a_missing_main_checkout_points_to_worktree_prune(tmp_path):
     options = " ".join(res["blocked"]["options"])
     assert "git worktree prune" in options and str(x.resolve()) not in options
     assert "git push origin refs/heads/main:refs/heads/main" in options
+
+
+# --- review fixes: nothing left behind, the user's choice honoured ----------------------
+
+def _thing_branch_without_checkout(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "thing", "thing")
+    repos.write(wt, "work.txt", "begun\n")
+    repos.commit_all(wt, "work begun")
+    git(main, "worktree", "remove", str(wt))
+    return main
+
+
+def test_a_temporary_branch_checkout_left_behind_is_removed_before_done(tmp_path):
+    main = _thing_branch_without_checkout(tmp_path)
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    _, res = repos.check(FLOW, main, "start", THING, "--sync", "merge")
+    temp = next(s for s in res["steps"] if s.get("argv", [])[1:3] == ["worktree", "add"])["argv"][3]
+    assert repos.execute(res["steps"][:-2]) is None      # merged there, never removed
+    _, res = repos.check(FLOW, main, "start", THING, "--sync", "merge")
+    assert _runs(res) == [["git", "worktree", "remove", temp]], res
+    seen, _, res = repos.converge(FLOW, main, "start", THING, "--sync", "merge")
+    assert seen == ["plan", "done"], res
+    assert not os.path.exists(temp)
+    assert "make the worktree of the existing branch thing" in _facts(res)
+
+
+def test_a_temporary_branch_checkout_with_changes_is_named_not_removed(tmp_path):
+    main = _thing_branch_without_checkout(tmp_path)
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    _, res = repos.check(FLOW, main, "start", THING, "--sync", "merge")
+    temp = next(s for s in res["steps"] if s.get("argv", [])[1:3] == ["worktree", "add"])["argv"][3]
+    repos.execute(res["steps"][:-2])
+    try:
+        repos.write(temp, "left.txt", "work\n")
+        rc, res = repos.check(FLOW, main, "start", THING, "--sync", "merge")
+        assert rc == 0 and res["outcome"] == "done", res
+        assert any(temp in f and "left.txt" in f for f in res["facts"]), res["facts"]
+    finally:
+        git(main, "worktree", "remove", "--force", temp)
+
+
+def test_no_merge_step_makes_an_autostash(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "thing", "thing")
+    repos.write(wt, "work.txt", "begun\n")
+    repos.commit_all(wt, "work begun")
+    git(main, "config", "merge.autoStash", "true")
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    edited = repos.README + "- a line the user is writing\n"
+    repos.write(wt, "plans/README.md", edited)       # the merge of main touches it
+    _, res = repos.check(FLOW, main, "start", THING, "--sync", "merge")
+    step, _ = repos.execute(res["steps"])
+    assert step["argv"][:2] == ["git", "merge"], "the merge must refuse, not stash"
+    assert git(main, "stash", "list") == "", "a merge stashed the user's work"
+    assert (wt / "plans/README.md").read_text(encoding="utf-8") == edited
+
+
+def test_every_merge_step_says_no_autostash(tmp_path):
+    main, _ = _behind_both(tmp_path)
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    _, res = repos.check(FLOW, main, "start", THING, "--sync", "both")
+    merges = [s["argv"] for s in res["steps"] if s.get("argv", [])[1:2] == ["merge"]]
+    assert len(merges) == 2 and all("--no-autostash" in a for a in merges), merges
+    (tmp_path / "second").mkdir()
+    main2 = repos.make(tmp_path / "second")
+    other = repos.clone(tmp_path / "second", "other")
+    repos.write(other, "src2.txt", "theirs\n")
+    repos.commit_all(other, "pushed elsewhere")
+    git(other, "push", "-q")
+    git(main2, "fetch", "-q")
+    _, res = repos.check(FLOW, main2, "start", THING)
+    assert ["git", "merge", "--ff-only", "--no-autostash", "origin/main"] in _runs(res), res
+
+
+NEWP = "2026-01-07-newp-design"
+
+
+def test_bring_over_takes_the_newest_copy(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "newp", "newp")
+    repos.plan(wt, f"backlog/{NEWP}")
+    repos.commit_all(wt, "first draft")
+    git(wt, "push", "-q", "-u", "origin", "newp")
+    other = repos.clone(tmp_path, "other")
+    git(other, "switch", "-q", "newp")
+    repos.write(other, f"plans/backlog/{NEWP}.md", "# Revised plan\n")
+    repos.commit_all(other, "revised")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    _, res = repos.check(FLOW, main, "start", NEWP)
+    newest = git(main, "rev-parse", "origin/newp")
+    assert ["git", "checkout", newest, "--", f"plans/backlog/{NEWP}.md"] in _runs(res), res
+
+
+def test_bring_over_blocks_on_two_unrelated_copies(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "newp", "newp")
+    repos.plan(wt, f"backlog/{NEWP}")
+    repos.commit_all(wt, "one draft")
+    side = _worktree(main, tmp_path / "side", "side")
+    repos.write(side, f"plans/backlog/{NEWP}.md", "# Another draft\n")
+    repos.commit_all(side, "another draft")
+    rc, res = repos.check(FLOW, side, "start", NEWP)
+    assert rc == 5 and res["steps"] == [], res
+    why = _blocked(res)
+    assert git(main, "rev-parse", "--short=7", "newp") in why
+    assert git(main, "rev-parse", "--short=7", "side") in why
+    assert "--branch" in " ".join(res["blocked"]["options"])
+
+
+def test_leaving_the_branch_leaves_its_own_copy_too(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "fresh", "fresh")
+    repos.plan(wt, f"backlog/{FRESH}")
+    repos.commit_all(wt, "write the plan")
+    repos.execute(repos.check(FLOW, wt, "start", FRESH)[1]["steps"])
+    git(wt, "merge", "-q", "--no-edit", "origin/main")
+    git(wt, "push", "-q", "-u", "origin", "fresh")
+    other = repos.clone(tmp_path, "other")
+    git(other, "switch", "-q", "fresh")
+    repos.write(other, "theirs.txt", "theirs\n")
+    repos.commit_all(other, "pushed elsewhere")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    before = git(wt, "rev-parse", "HEAD")
+    seen, _, res = repos.converge(FLOW, wt, "start", FRESH, "--sync", "none")
+    assert seen == ["done"], res
+    assert git(wt, "rev-parse", "HEAD") == before
+    assert "you chose to leave the branch" in _facts(res)
+
+
+def test_a_branch_name_starting_with_a_dash_is_blocked(tmp_path):
+    main = repos.make(tmp_path)
+    rc, out = repos.run(FLOW, main, "check", "start", THING, "--branch=-x")
+    assert rc == 5 and "BLOCKED" in out.splitlines()[0], out
+
+
+def test_a_same_named_branch_without_the_plan_is_questioned(tmp_path):
+    main = repos.make(tmp_path)
+    empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    git(main, "branch", "thing", git(main, "commit-tree", "-m", "unrelated", empty_tree))
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    _, res = repos.check(FLOW, main, "start", THING)
+    assert "thing doesn't hold the plan — is it the plan's branch? (--branch NAME)" in \
+        _facts(res), res
+
+
+def test_a_merge_in_the_users_checkout_names_its_changes_first(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "thing", "thing")
+    repos.write(wt, "work.txt", "begun\n")
+    repos.commit_all(wt, "work begun")
+    repos.write(wt, "src.txt", "half done\n")
+    repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"])
+    _, res = repos.check(FLOW, main, "start", THING, "--sync", "merge")
+    assert any(str(wt.resolve()) in f and "src.txt" in f and "uncommitted" in f
+               for f in res["facts"]), res["facts"]
+
+
+def test_the_question_names_mains_latest_change_to_the_plan(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "thing", "thing")
+    repos.write(wt, "work.txt", "begun\n")
+    repos.commit_all(wt, "work begun")
+    seen, _, res = repos.converge(FLOW, main, "start", THING)
+    assert "origin/main's latest change to the plan (" in res["question"]["text"], res
+
+
+def test_start_needs_an_active_section(tmp_path):
+    text = repos.README.replace("## 🔵 active — in flight\n\n*(none)*\n\n", "")
+    main = repos.make(tmp_path, text=text)
+    rc, res = repos.check(FLOW, main, "start", THING)
+    assert rc == 5 and "no active section" in res["blocked"]["rule"], res

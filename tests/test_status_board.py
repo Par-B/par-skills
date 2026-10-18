@@ -655,6 +655,24 @@ def test_title_of_takes_the_first_real_heading_else_prose():
     assert board.title_of("") == "(no description)"
 
 
+def test_short_cmd_keeps_the_first_pathspec_and_counts_the_rest():
+    assert board.short_cmd(["git", "status", "--", "a", "b", "c"]) == "git status -- a …(+2)"
+    assert board.short_cmd(["git", "status", "--", "a"]) == "git status -- a"
+    assert board.short_cmd(["git", "log", "x y"]) == "git log 'x y'"
+
+
+@POSIX
+def test_the_heartbeat_shortens_a_long_pathspec_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status')}{os.pathsep}{os.environ['PATH']}")
+    log = io.StringIO()
+    argv = ["git", "status", "--"] + [f"p{i}" for i in range(30)]
+    with pytest.raises(board.Watchdog) as caught:
+        board.run_watched(argv, str(tmp_path), warn=0.2, kill=1, log=log)
+    beats = log.getvalue().splitlines()
+    assert beats and all("`git status -- p0 …(+29)`" in b for b in beats), beats
+    assert "p29" in str(caught.value)          # the message keeps the whole command
+
+
 def test_trace_logs_each_command_with_its_exit_and_time(tmp_path):
     log = io.StringIO()
     p = board.run_watched([sys.executable, "-c", "raise SystemExit(3)"], str(tmp_path),

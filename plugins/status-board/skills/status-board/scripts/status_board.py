@@ -126,6 +126,17 @@ class Watchdog(Exception):
         self.argv, self.cwd, self.secs = argv, cwd, secs
 
 
+def short_cmd(argv):
+    """`argv` as a shell-quoted line, a long pathspec list after `--` cut to
+    its first entry and a count ("git status -- a …(+2)")."""
+    if "--" in argv:
+        cut = argv.index("--") + 1
+        rest = argv[cut:]
+        if len(rest) > 1:
+            return f"{shlex.join(argv[:cut + 1])} …(+{len(rest) - 1})"
+    return shlex.join(argv)
+
+
 def watch_secs(warn=None, kill=None):
     """(warn, kill) seconds: the arguments, else the environment, else 5 and 60."""
     def valid(value):
@@ -171,8 +182,9 @@ def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
     """Run `argv` in `cwd` (no shell, no stdin, no prompts) under a watchdog.
 
     After `warn` seconds, and every `warn` seconds after, a line on `log`
-    (stderr) names the command still running; at `kill` seconds it is stopped
-    and Watchdog is raised. Any other exception while waiting (a Ctrl-C, which
+    (stderr) names the command still running (in short_cmd's form); at `kill`
+    seconds it is stopped and Watchdog is raised, its message naming the
+    whole command. Any other exception while waiting (a Ctrl-C, which
     the command's own session never sees) stops it too. With `trace`, every
     command is logged with its exit code and time. Returns a CompletedProcess;
     OSError (no such program) propagates."""
@@ -197,7 +209,7 @@ def run_watched(argv, cwd, warn=None, kill=None, trace=False, log=None):
                 if secs >= kill:
                     _stop(p)
                     raise Watchdog(argv, cwd, secs) from None
-                print(f"[status-board] still waiting on `{shlex.join(argv)}` in {cwd} "
+                print(f"[status-board] still waiting on `{short_cmd(argv)}` in {cwd} "
                       f"({secs:.0f}s)", file=log, flush=True)
     except Watchdog:
         raise

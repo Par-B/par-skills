@@ -66,11 +66,13 @@ NEVER = "never reset, stash, rebase or force-push to get past this"
 class Blocked(Exception):
     """A rule the check cannot get past; exit `code` (5, or NOT_FOUND)."""
 
-    def __init__(self, rule, why, safe=(), avoid=(), options=(), code=5):
+    def __init__(self, rule, why, safe=(), avoid=(), options=(), code=5, command=None):
         super().__init__(rule)
         self.code = code
         self.data = {"rule": rule, "why": why, "safe": list(safe),
                      "avoid": list(avoid) or [NEVER], "options": list(options)}
+        if command:                       # the whole argv of a command that hung
+            self.data["command"] = list(command)
 
 
 def allowed(args):
@@ -576,7 +578,7 @@ def enter_steps(s, w, top, change):
         steps.append(run_step(top, ["git", "worktree", "add", "--detach", temp, on],
                               f"a detached checkout of {on} ({s['upstream'][:7]}) at {temp}"))
     if w["mc"] and not w["busy"] and s["behind"]:
-        steps.append(run_step(w["work"], ["git", "merge", "--ff-only", on],
+        steps.append(run_step(w["work"], ["git", "merge", "--ff-only", "--no-autostash", on],
                               f"the {s['main']} checkout is at {on} ({s['upstream'][:7]})"))
     return steps
 

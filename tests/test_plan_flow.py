@@ -1,3 +1,4 @@
+import json
 import os
 import pathlib
 import shutil
@@ -390,6 +391,20 @@ def test_a_hung_git_blocks_with_the_facts_so_far(tmp_path):
     assert "shouldn't take this long" in p.stdout
     assert any(line.startswith("- main: main (origin/main") for line in rest), p.stdout
     assert "still waiting on `git" in p.stderr
+    # the long pathspec list is shortened where it repeats, and kept whole once
+    assert "…(+" in first and "plans/README.md" in first and "-design-plan.md" not in first
+    blocked = next(line for line in rest if line.startswith("Blocked: "))
+    assert "…(+" in blocked
+    why = next(line for line in rest if line.startswith("Why: "))
+    assert "…(+" not in why and "2026-01-01-thing-plan.md.tasks.json" in why
+    # under load any command may be slow enough to beat; the hung one is status
+    beats = [b for b in p.stderr.splitlines() if "still waiting" in b and " status " in b]
+    assert beats and all("…(+" in b for b in beats), p.stderr
+    p = subprocess.run([sys.executable, str(FLOW), "check", "finish", THING, "--json"],
+                       cwd=main, capture_output=True, text=True, encoding="utf-8", env=env)
+    command = json.loads(p.stdout)["blocked"]["command"]
+    assert command[:3] == ["git", "-c", "core.fsmonitor=false"] and "status" in command
+    assert command[-1] == "plans/wont-do/2026-01-01-thing-plan.md.tasks.json"
 
 
 # --- the contract ---------------------------------------------------------------
