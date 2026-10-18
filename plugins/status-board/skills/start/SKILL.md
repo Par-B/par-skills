@@ -58,7 +58,9 @@ branch with another name.
   the existing branch <name> with your worktree tool` → do it now, checking
   out the **existing** branch (`git worktree add <path> <name>`, not `-b`),
   and go on with the plan there. A fact that the branch is not pushed is for
-  the user; don't push it.
+  the user; don't push it. While the work is on the branch the plan stays in
+  `active/`; don't move it to `done/` there — after the merge, run
+  `/status-board:finish`.
 
 `[status-board] still waiting on …` lines on stderr are progress, not output.
 A command the check had to stop comes back as ``BLOCKED: `<command>` did

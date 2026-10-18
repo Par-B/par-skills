@@ -1,17 +1,18 @@
 ---
 name: finish
-description: Use after a plan's branch has been merged into main — a pull request merged, or the branch merged by hand — or when the user says a plan is finished, shipped or dropped. Checks on main that the plan is in done/ (or wont-do/), its *.tasks.json trackers are gone and its note is in that section, and puts right what is missing as a pushed plans-only commit.
+description: Use after a plan's branch has been merged into main — a pull request merged, or the branch merged by hand — or when the user says a plan is finished, shipped or dropped; do not move the plan to done/ on the branch. Moves the plan to done/ (or wont-do/) on main, removes its *.tasks.json trackers and moves its note to that section, as a pushed plans-only commit.
 ---
 
 # Finish a plan on main
 
-The branch still moves its plan to `done/` itself before merging, so `main`
-shows it done exactly when the work lands. This is the check after the merge:
-a pull request merged on GitHub leaves the local `main` behind, and a branch
-that forgot the move leaves the plan in flight for good. The check reads only:
-files in `done/` (or `wont-do/`), no `*.tasks.json` tracker, its note in that
-section, off the next list — and says what to do for what is missing; you run
-each step. With nothing missing there is nothing to commit.
+A plan is marked done only after the merge, and finish is what does it: on
+`main`, once the plan's branch is merged (a pull request merged, or merged by
+hand). The branch never moves its plan to `done/`; while the work is there it
+stays in `active/`. The check reads only: files in `done/` (or `wont-do/`),
+no `*.tasks.json` tracker, its note in that section, off the next list — and
+says what to do for what is missing, usually the move itself; you run each
+step. A pull request merged on GitHub leaves the local `main` behind; the
+plan brings it level. With nothing missing there is nothing to commit.
 
 ## 1. Name the plan
 
