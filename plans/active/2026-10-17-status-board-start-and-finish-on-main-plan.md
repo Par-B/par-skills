@@ -1854,7 +1854,7 @@ the `start`/`finish` subcommands) is removed.
 `plan_flow.py check finish <plan> [--wont-do]`, both with `[--root DIR] [--json] [--warn S]
 [--timeout S] [--trace]`. It reads only: no fetch, no network, no command that writes
 (`git status` runs with `GIT_OPTIONAL_LOCKS=0`). Exit 0 for Plan, Question and Nothing to do;
-2 for no such plan; 5 for Blocked.
+3 for no such plan (2 is argparse's usage error); 5 for Blocked. *(Corrected during R3.)*
 
 `--json` prints one object; the text form renders the same data:
 
@@ -1866,7 +1866,7 @@ the `start`/`finish` subcommands) is removed.
     {"kind": "run", "cwd": "/abs/dir", "argv": ["git", "merge", "--ff-only", "origin/main"],
      "limit": 10, "expect": "local main is at origin/main (abc1234)"},
     {"kind": "edit", "cwd": "/abs/dir", "path": "plans/README.md", "start": 30, "end": 31,
-     "old": ["- `x` — note."], "new": [], "context": ["…3 lines before…", "…3 after…"],
+     "old": ["- `x` — note."], "new": [], "context": {"before": ["…3 lines before…"], "after": ["…3 after…"]},
      "review": "re-read the active and backlog sections: the note for x should describe it as in flight"},
     {"kind": "recheck", "argv": ["python3", "/abs/plan_flow.py", "check", "start", "x"]}
   ],
