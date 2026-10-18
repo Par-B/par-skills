@@ -478,25 +478,25 @@ system Seatbelt sandbox. It protects against all tool commands, not just these
 plugins — the right layer for the "scripts from unknown sources" concern.
 
 **Pin what you install.** The repo is public and tagged, so for an immutable
-install you can pin the marketplace to a release tag (e.g. `v1.1.1`) instead of
+install you can pin the marketplace to a release tag (e.g. `v1.2.0`) instead of
 tracking the moving `main`. Easiest — append the tag when adding it:
 
 ```text
-/plugin marketplace add Par-B/par-skills@v1.1.1
+/plugin marketplace add Par-B/par-skills@v1.2.0
 ```
 
-(GitHub shorthand uses `@v1.1.1`; a full git URL uses `#v1.1.1`.) Or declare it
+(GitHub shorthand uses `@v1.2.0`; a full git URL uses `#v1.2.0`.) Or declare it
 persistently in your `settings.json`:
 
 ```json
 "extraKnownMarketplaces": {
   "par-plugins": {
-    "source": { "source": "github", "repo": "Par-B/par-skills", "ref": "v1.1.1" }
+    "source": { "source": "github", "repo": "Par-B/par-skills", "ref": "v1.2.0" }
   }
 }
 ```
 
-Installs and `/plugin marketplace update` then stay on `v1.1.1` until you change
+Installs and `/plugin marketplace update` then stay on `v1.2.0` until you change
 the ref.
 
 ## Recommended permissions (optional · unrelated to the skills)
