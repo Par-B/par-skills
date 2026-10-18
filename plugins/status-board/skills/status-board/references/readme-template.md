@@ -15,7 +15,9 @@ that carries a one-line note per plan.
 ## Conventions
 
 - New plans start in `backlog/` (or `active/` if work starts immediately).
-- When work starts, move the plan to `active/`. When it ships, move it to `done/`.
+- When work starts, move the plan to `active/` on `main` (`/status-board:start`
+  does it and branches from there). When it ships, the branch moves it to
+  `done/`; after the merge, `/status-board:finish` checks `main`.
 - Naming: `YYYY-MM-DD-<slug>-design.md` (design) / `-plan.md` (task breakdown).
 - Only `active/` plans keep a `*.tasks.json` tracker — delete it on archival.
 - This file is the **current board**: it keeps detailed `done`/`wont-do` notes

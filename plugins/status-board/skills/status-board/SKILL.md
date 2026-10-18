@@ -9,7 +9,7 @@ Render a repo's `plans/` directory as a single status-board table, grouped by
 lifecycle state. Prefer the bundled script (fast, one pass); fall back to your
 own tools where it can't run, so this works on Linux, macOS, and Windows. View,
 bootstrap, migrate and reorder the Next list only — never move, rename, or create
-plan files.
+plan files (`/status-board:start` and `/status-board:finish` move them).
 
 ## 1. Pick the scope from the user's phrasing
 
@@ -49,6 +49,9 @@ Read its output:
 - `NO_BOARD` (exit 3) → go to **Bootstrap**.
 - A table whose **⚠️ Drift** has `plans/README.md` migration rows → relay it
   verbatim, then go to **Migrate (pre-0.5 board)**.
+- A table whose **⚠️ Drift** has rows ending `run /status-board:start` or
+  `run /status-board:finish` → relay it verbatim, then offer once to run that
+  skill for those plans.
 - `command not found` → retry once with `python` instead of `python3`; if that
   also fails, use the **Portable fallback** below.
 
@@ -120,6 +123,18 @@ absent, everything behaves exactly as a single-file board.
   A next-order entry matching no plan file in any state → `in next-order list,
   no file`; these rows come after the undocumented and stale rows, in list
   order. A slug in that list counts as documented.
+  Off `main` (another branch or a worktree), the script also compares with
+  `origin/main` as last fetched (origin/HEAD's branch; unset → `origin/main`,
+  else `origin/master`) — read-only, never fetching: it runs `git
+  --no-lazy-fetch`, so it needs git 2.44 or later and is skipped on older git,
+  without git or a remote, and by the portable fallback. A plan in `active/`
+  here that is still in `backlog/` on main → `active here, still in backlog on
+  main — run /status-board:start`; once the branch's upstream is gone (a merged
+  pull request's branch, after `git fetch --prune`), a plan in
+  `done/`/`wont-do/` here that is still `active`/`backlog` on main → `<state>
+  here and merged, still <state> on main — run /status-board:finish` (e.g.
+  `done here and merged, still active on main — run /status-board:finish`).
+  These rows come next.
   Migration rows, named `plans/README.md`, come last: no `next … order`
   heading → `no "next — in order" section (pre-0.5 board) — migrate`; each
   old-style list (a non-list line starting in bold whose bold text holds "next"
@@ -227,12 +242,14 @@ approval; don't ask again.
    it). Renumber from 1; replace or drop a `*(none)*` line.
 4. Re-render with `--scope next` and relay the table verbatim.
 
-Never move plan files here: starting a plan is the user's job (or their
-plan-running tools'). A started plan leaves the section by itself.
+Never move plan files here: `/status-board:start` starts a plan. A started plan
+leaves the section by itself.
 
 ## Out of scope
 
 View, bootstrap, migrate and reorder only. Migration edits only `plans/README.md`,
 and only after explicit approval; reordering edits only the Next list, on the
-user's request. Do NOT move plans between states, rename them, or
-create individual plan files — that is the user's job.
+user's request. Do NOT move plans between states, rename them, or create
+individual plan files here — starting and finishing a plan are
+`/status-board:start` and `/status-board:finish`; writing plans is the user's
+job.
