@@ -767,3 +767,58 @@ def test_main_check_hang_shows_a_skip_row(tmp_path, fake_git):
     pid = _sleeper_pid(tmp_path)
     assert pid is not None, "the fake git never started its sleeper"
     assert _gone(pid)
+
+
+# --- last 2 done / won't-do: same-date plans in the README's newest-first order ---
+
+DONE = "🟢 Last 2 done"
+WONTDO = "🚫 Last 2 won't-do"
+
+
+def _closed_readme(done=(), wontdo=()):
+    """A README whose done and wont-do sections list `done` / `wontdo` as
+    notes, top first (the README's own newest-first order)."""
+    def notes(stems):
+        return [f"- `{s}` — note." for s in stems] or ["*(none)*"]
+    return "\n".join(["# Plans", "",
+                      "## 🟢 done — shipped", "", *notes(done), "",
+                      "## 🚫 wont-do — decided against", "", *notes(wontdo), ""])
+
+
+def test_same_date_done_plans_follow_the_readme_order(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c", "2026-01-01-a", "2026-01-01-b"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+def test_a_newer_date_still_wins_over_the_readme_order(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-02-01-b"]
+    readme = _closed_readme(done=["2026-01-01-a", "2026-02-01-b"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE)[0] == "| 2026-02-01-b | Title of 2026-02-01-b |"
+
+
+def test_a_same_date_plan_without_a_note_comes_after_those_with_one(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+def test_a_brace_note_orders_its_pair_and_wont_do_too(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-z-design", "done/2026-01-01-z-plan",
+             "wont-do/2026-01-01-p", "wont-do/2026-01-01-q"]
+    readme = _closed_readme(done=["2026-01-01-z-{design,plan}", "2026-01-01-a"],
+                            wontdo=["2026-01-01-q", "2026-01-01-p"])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-z-design | Title of 2026-01-01-z-design |",
+        "| 2026-01-01-z-plan | Title of 2026-01-01-z-plan |"]
+    assert _section(lines, WONTDO) == [
+        "| 2026-01-01-q | Title of 2026-01-01-q |",
+        "| 2026-01-01-p | Title of 2026-01-01-p |"]

@@ -102,7 +102,9 @@ absent, everything behaves exactly as a single-file board.
 ## Rules & format (both paths must match)
 
 - Source of truth = the folders. `done` and `wont-do`: keep only the **2 newest**
-  by `YYYY-MM-DD-` filename prefix (undated sort last).
+  by `YYYY-MM-DD-` filename prefix (undated sort last); plans with the same date
+  in the order their notes appear in `plans/README.md` (those sections list
+  newest first), a plan with no note after those with one.
 - Description = the one-line note from `plans/README.md`, matched by filename —
   expand `{a,b}` brace shorthand and read backticked slugs. **Also read
   `plans/ARCHIVE.md`** (same sibling dir) if present and match by filename, so a

@@ -281,19 +281,25 @@ def date_sort_key(fname):
 def parse_readme(path):
     """Read plans/README.md (read-only) and extract, by pure text parsing:
       notes{stem:note}, documented_stems (mentioned anywhere), table_stems
-      (rows that define a plan). File contents are never executed."""
-    notes, documented, table = {}, set(), set()
+      (rows that define a plan), and order{stem: line} — where the first
+      top-level list item or table row naming a plan sits (the done and
+      won't-do sections list newest first). File contents are never executed."""
+    notes, documented, table, order = {}, set(), set(), {}
     try:
         # Read-only: parse the README as text. Contents are pattern-matched only.
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
-        return notes, documented, table
+        return notes, documented, table, order
     text = text.replace("\r\n", "\n").replace("\r", " ")
     # Anything mentioned anywhere counts as "documented": .md tokens + backticked slugs.
     documented |= mentioned_stems(text)
     # Table rows define plan entries + their notes (used for stale + descriptions).
-    for line in text.splitlines():
+    for n, line in enumerate(text.splitlines()):
+        item = LIST_ITEM_RE.match(line)
+        if item:
+            for s in item_slugs(item.group(1)):
+                order.setdefault(s, n)
         if "|" not in line:
             continue
         # Split on unescaped pipes only, then unescape \| inside cells.
@@ -314,10 +320,11 @@ def parse_readme(path):
                 s = stem(exp)
                 table.add(s)
                 documented.add(s)
+                order.setdefault(s, n)
                 if note:
                     notes[s] = note
             break
-    return notes, documented, table
+    return notes, documented, table, order
 
 
 def _first_token(text):
@@ -620,12 +627,12 @@ def main():
             ]))
         return 0
 
-    notes, documented, table_stems = parse_readme(readme)
+    notes, documented, table_stems, order = parse_readme(readme)
     # ARCHIVE.md (deep archive) is a second description source for plans whose
     # README note has rolled off. README notes win on a key collision.
     archive_path = os.path.join(plans, ARCHIVE_NAME)
     if os.path.isfile(archive_path):
-        arch_notes, _, _ = parse_readme(archive_path)
+        arch_notes, _, _, _ = parse_readme(archive_path)
         for k, v in arch_notes.items():
             notes.setdefault(k, v)
     # Not started: next, in order — the README's ordered list, kept to plans still in backlog/
@@ -654,7 +661,12 @@ def main():
         if state == "backlog":
             files = [f for f in files if stem(f) not in next_live]
         if state in ("done", "wont-do"):
-            files = sorted(files, key=date_sort_key, reverse=True)[:2]
+            # Newest first by date; same-date plans in the README's own
+            # newest-first order (a plan with no note after those with one).
+            def newest(f):
+                at = order.get(stem(f))
+                return date_sort_key(f), -at if at is not None else float("-inf")
+            files = sorted(files, key=newest, reverse=True)[:2]
         rows.append(f"| **{HEADERS[state]}** | |")
         if not files:
             rows.append("| *(none)* | |")
