@@ -28,9 +28,12 @@ included), plus each one the user names or the plan's pull requests use —
 
 - `gh` available → for each branch, one call (a read):
   `gh pr list --head <branch> --state all --json number,state,url`.
-  Every PR merged → add `--prs-merged`. Any still open, or closed without
-  merging (that may mean won't do, or a dropped feature) → stop and ask the
-  user. No `gh` → the check proves the merge locally, from git.
+  At least one PR for every branch, and all merged → add `--prs-merged`.
+  None found for a branch (no PR for that head, a wrong name, a branch never
+  pushed) → don't pass it: let the check prove the merge from git, or ask
+  the user. Any still open, or closed without merging (that may mean won't
+  do, or a dropped feature) → stop and ask the user. No `gh` → the check
+  proves the merge from git.
 - `--confirm` only when the user has said in so many words that the plan is
   finished (with `--wont-do`: dropped) — never inferred from a workflow (a
   merge script, a finishing skill, "the tests pass"). `--wont-do` needs
@@ -61,9 +64,13 @@ included), plus each one the user names or the plan's pull requests use —
   Facts showing the plan on `origin/main` anywhere but `active/` (`backlog/`,
   `future-ideas/`: never started) → confirm with the user that it is
   finished before running the steps.
-- `BLOCKED` because a branch isn't proven merged → relay it with each branch
-  and what is missing, and ask the user: merge it, or say it is finished
-  (then `--confirm`).
+- `BLOCKED: <plan> isn't proven merged` → relay each branch and what is
+  missing (the `Why:` line), and ask the user: merge it, or say it is
+  finished (then `--confirm`). A squash or rebase merge leaves no trace in
+  git: confirm the PRs with `gh`, then `--prs-merged`. Another branch of the
+  plan → `--branch NAME`.
+- `BLOCKED: dropping a plan needs the user's explicit word` → ask; only if
+  they say to drop it, check again with `--wont-do --confirm`.
 - `BLOCKED: <rule>` (exit 5) → relay the rule, why, and the options. Don't
   work around it: never reset, stash, rebase, force-push, drop a commit or
   delete a copy that differs. An option that names such a command is for the

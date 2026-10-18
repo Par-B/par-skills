@@ -136,8 +136,9 @@ pushed plans-only commit. Nothing missing, no commit.
 A plan may be marked done only when every pull request for it is merged, or
 you say so. Claude looks the plan's PRs up with `gh` (one `gh pr list --head
 <branch>` per branch: the default name plus each `--branch NAME`) and passes
-`--prs-merged` when all are merged; an open PR, or one closed without merging,
-means it asks you. `--confirm` is your explicit word, never inferred from a
+`--prs-merged` only when every branch has at least one PR and all are merged
+(no PR found for a branch: it leaves the proof to git, or asks you); an open
+PR, or one closed without merging, means it asks you. `--confirm` is your explicit word, never inferred from a
 workflow; `--wont-do` needs it. Without either, the check plans the move only
 when every branch is proven merged into `origin/main` locally, and otherwise
 stops, listing each branch and what is missing. Unfinished tasks in the
@@ -276,6 +277,12 @@ commands under `git status`). Nothing in the plugin runs a git command that chan
 anything: the fetch, `git mv`, commit, push, branch and merge — and the README
 edits — are steps Claude runs one at a time, and each prompts, or is judged by
 the auto-mode evaluator, as usual.
+
+The hook also approves `check finish --confirm` and `--prs-merged`: the check
+only reads, so they change nothing by themselves. The commit and push that
+follow still prompt (or go to auto mode's evaluator). Nothing but the finish
+skill's rule stops Claude passing `--confirm` itself, so your word is what
+matters: answer "is this plan finished?" only when it is.
 
 Claude runs each of those git steps as `git -C <dir> <the rest>` (a temporary
 worktree is removed mid-plan, and a shell that `cd`s outside the allowed
