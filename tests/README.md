@@ -34,9 +34,13 @@ pre-0.6.1 `## ⏭ next — in order` heading still matches), ends
 at the next heading and skips fenced code; only top-level items count (nested
 bullets are ignored), an item may name its plan by path or `.md` link, and
 commented-out items are skipped. "Last 2 done" / "Last 2 won't-do": a newer
-date wins; plans with the same date follow the README's newest-first note order
-(a `{design,plan}` note orders its pair), and a plan with no note comes after
-those with one. Migration: a board without the heading and
+date wins; plans with the same date follow the order of their notes in the
+README's done (or wont-do) section, top first (a `{design,plan}` note orders its
+pair, and a table-format section orders by its rows), then the same section of
+`ARCHIVE.md`, then plans with no note. A stale next-list entry, a leftover
+backlog note or a Conventions bullet naming the plan above that section, and a
+fenced example or a commented-out item inside it, don't change the order.
+Migration: a board without the heading and
 an old-style bold "next … order" list are flagged as `plans/README.md` drift
 rows (full scope only), while prose and a bold line with no list are not. A
 frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)

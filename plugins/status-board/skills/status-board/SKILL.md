@@ -76,7 +76,8 @@ board yourself, applying the **Rules & format** below with `Glob`/`Read`:
 2. `Glob` each in-scope state dir for `*.md` (exclude `README.md`, `*.tasks.json`).
 3. `Read` `plans/README.md` once for per-plan notes and its `next — in order`
    list (any heading with the words next and order — see Rules & format); also
-   `Read` `plans/ARCHIVE.md` if it exists (README notes win on a collision). For
+   `Read` `plans/ARCHIVE.md` if it exists (README notes win on a collision); the
+   order of their done/won't-do notes breaks same-date ties. For
    `archive` scope, relay `plans/ARCHIVE.md` verbatim (or `*(none)*` if absent).
 4. Only for plans with no README/ARCHIVE note, `Read` that file for a title.
 
@@ -102,9 +103,17 @@ absent, everything behaves exactly as a single-file board.
 ## Rules & format (both paths must match)
 
 - Source of truth = the folders. `done` and `wont-do`: keep only the **2 newest**
-  by `YYYY-MM-DD-` filename prefix (undated sort last); plans with the same date
-  in the order their notes appear in `plans/README.md` (those sections list
-  newest first), a plan with no note after those with one.
+  by `YYYY-MM-DD-` filename prefix (undated sort last). Plans with the same date
+  go in the order of their notes in that state's section of `plans/README.md`,
+  top first (the section lists newest first); then those whose note is only in
+  that section of `plans/ARCHIVE.md`, in its order; then those with no note.
+  The section is the one under the shallowest heading (the first among equals)
+  whose earliest state word is done/shipped (or won't-do/rejected), running to
+  the next heading of the same or a higher level; a heading holding "next" and
+  "order" is never one. A note is an unindented list item or a table row there,
+  outside fenced code and HTML comments; its plan is its first backticked slug
+  or `.md` filename (`{a,b}` brace shorthand names a pair). Mentions anywhere
+  else — the next list, another section, Conventions — don't count.
 - Description = the one-line note from `plans/README.md`, matched by filename —
   expand `{a,b}` brace shorthand and read backticked slugs. **Also read
   `plans/ARCHIVE.md`** (same sibling dir) if present and match by filename, so a

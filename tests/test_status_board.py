@@ -775,13 +775,14 @@ DONE = "🟢 Last 2 done"
 WONTDO = "🚫 Last 2 won't-do"
 
 
-def _closed_readme(done=(), wontdo=()):
+def _closed_readme(done=(), wontdo=(), before=(), done_top=()):
     """A README whose done and wont-do sections list `done` / `wontdo` as
-    notes, top first (the README's own newest-first order)."""
+    notes, top first (the README's own newest-first order); the `before` lines
+    go above the done section and the `done_top` lines above its notes."""
     def notes(stems):
         return [f"- `{s}` — note." for s in stems] or ["*(none)*"]
-    return "\n".join(["# Plans", "",
-                      "## 🟢 done — shipped", "", *notes(done), "",
+    return "\n".join(["# Plans", "", *before,
+                      "## 🟢 done — shipped", "", *done_top, *notes(done), "",
                       "## 🚫 wont-do — decided against", "", *notes(wontdo), ""])
 
 
@@ -822,3 +823,63 @@ def test_a_brace_note_orders_its_pair_and_wont_do_too(tmp_path):
     assert _section(lines, WONTDO) == [
         "| 2026-01-01-q | Title of 2026-01-01-q |",
         "| 2026-01-01-p | Title of 2026-01-01-p |"]
+
+
+ABOVE = {
+    "stale next entry": ["## ⚪ not started — next, in order", "",
+                         "1. `2026-01-01-b`: why", ""],
+    "leftover backlog note": ["## ⚪ backlog — not started", "",
+                              "- `2026-01-01-b` — old note.", ""],
+    "conventions bullet": ["## Conventions", "",
+                           "- e.g. `2026-01-01-b` names a plan.", ""],
+}
+HIDDEN = {
+    "fenced example": ["```", "- `2026-01-01-b` — an example note.", "```", ""],
+    "commented-out item": ["<!--", "- `2026-01-01-b` — dropped note.", "-->", ""],
+}
+
+
+@pytest.mark.parametrize("before", ABOVE.values(), ids=ABOVE.keys())
+def test_only_the_done_sections_notes_order_done_plans(tmp_path, before):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c", "2026-01-01-a", "2026-01-01-b"],
+                            before=before)
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+@pytest.mark.parametrize("top", HIDDEN.values(), ids=HIDDEN.keys())
+def test_hidden_lines_in_the_done_section_do_not_order(tmp_path, top):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = _closed_readme(done=["2026-01-01-c", "2026-01-01-a", "2026-01-01-b"],
+                            done_top=top)
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | Title of 2026-01-01-c |",
+        "| 2026-01-01-a | Title of 2026-01-01-a |"]
+
+
+def test_a_table_done_section_orders_by_its_rows(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c"]
+    readme = "\n".join([
+        "# Plans", "", "## 🟢 done — shipped", "", "| Plan | Note |", "|---|---|",
+        "| 2026-01-01-c.md | note |", "| 2026-01-01-a.md | note |",
+        "| 2026-01-01-b.md | note |", ""])
+    lines = _run(_board(tmp_path, readme, files))
+    assert _section(lines, DONE) == [
+        "| 2026-01-01-c | note |", "| 2026-01-01-a | note |"]
+
+
+def test_archive_order_breaks_ties_after_the_readmes(tmp_path):
+    files = ["done/2026-01-01-a", "done/2026-01-01-b", "done/2026-01-01-c",
+             "done/2026-01-01-d"]
+    r = _board(tmp_path, _closed_readme(done=["2026-01-01-b"]), files)
+    (r / "plans" / "ARCHIVE.md").write_text(
+        _closed_readme(done=["2026-01-01-c", "2026-01-01-b", "2026-01-01-a"]),
+        encoding="utf-8")
+    for scope in ("full", "done"):
+        assert _section(_run(r, scope), DONE) == [
+            "| 2026-01-01-b | Title of 2026-01-01-b |",
+            "| 2026-01-01-c | Title of 2026-01-01-c |"]

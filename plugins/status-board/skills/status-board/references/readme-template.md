@@ -20,6 +20,8 @@ that carries a one-line note per plan.
   after the merge, `/status-board:finish` moves it to `done/` on `main`.
 - Naming: `YYYY-MM-DD-<slug>-design.md` (design) / `-plan.md` (task breakdown).
 - Only `active/` plans keep a `*.tasks.json` tracker — delete it on archival.
+- The `done` and `wont-do` sections list notes **newest first**: a finished
+  plan's note goes at the top of its section.
 - This file is the **current board**: it keeps detailed `done`/`wont-do` notes
   only for the current + previous release. Older ones roll to a sibling
   `ARCHIVE.md` (which also carries a terse index of the whole `done/` folder).
