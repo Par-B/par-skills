@@ -300,10 +300,12 @@ with your own tools:
 2. Every done and won't-do section, flagged or not: sort each run of notes
    between headings (each note with its continuation lines; table rows as
    rows) newest first by the date in their plan's slug, keeping same-date
-   notes in their relative order — unless the whole section's dated notes were
-   oldest first (dates never going down), then reverse the same-date groups
-   too. Undated notes stay where they are; only the dated notes are reordered
-   among the dated notes' places.
+   notes in their relative order — unless the run was plainly oldest first:
+   its dated notes span at least two dates and never go down the page; then
+   reverse the same-date groups too. A run whose dated notes all share one
+   date shows no order either way: leave it exactly as it is. Undated notes
+   stay where they are; only the dated notes are reordered among the dated
+   notes' places.
 3. Conventions, with the bullets copied from `references/readme-template.md`:
    replace the line "When work starts, move the plan to `active/`. When it
    ships, move it to `done/`." with the template's start/finish bullet (add it
