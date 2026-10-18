@@ -1,5 +1,5 @@
 {
-  "description": "Auto-approve the status-board plugin's own read-only render script. Scoped via `if` to ONLY this bundled scanner (any --scope arg); never touches other commands. The `if` uses permission-rule syntax, where ${CLAUDE_PLUGIN_ROOT} is NOT expanded — so it anchors on a glob of the stable script-path suffix (`*status-board/scripts/status_board.py*`) instead of the install-/version-specific absolute path. Tradeoff: a suffix glob is slightly broader than a full-path anchor, but the matched script is read-only; the plugin's write actions (bootstrap mkdir/touch/cp, and the README edits — pre-0.5 migration, reordering the Next list — done with the agent's Edit tool) are deliberately NOT covered and still prompt. So is plan_flow.py (/status-board:start and /status-board:finish), which commits and pushes to main: it is never matched. Both `python3` and the `python` fallback are matched. User consent is granted at plugin install/trust time.",
+  "description": "Auto-approve ONLY the status-board plugin's read-only scripts so viewing the board and running /status-board:start or /status-board:finish isn't interrupted by prompts for commands that change nothing. Delegates to approve_read_only.py, which shlex-parses the command and approves exactly one clean invocation (python3, the python fallback, or an absolute interpreter path; optionally prefixed by STATUS_BOARD_WARN_SECS=<n> / STATUS_BOARD_KILL_SECS=<n>, the watchdog's timers) of: status_board.py (renders the board; any args) and plan_flow.py check ... (reads only — no fetch, no network, no write — and prints the facts and the steps to run). Path matching is on the script's stable suffix status-board/scripts/<name>.py, not the install-/version-specific absolute path. Never approved, so they still prompt: plan_flow.py with no subcommand or any subcommand other than check; every git command, push and README edit the check prints for Claude to carry out; any other environment assignment; any command with shell chaining/redirection/substitution (& | ; < > ` $( or a newline). Consent is granted at plugin install/trust time; delete this file to opt out (the skills still work, you'll just approve each script call).",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,13 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(python3 *status-board/scripts/status_board.py*)",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"status-board read-only render\"}}'"
-          },
-          {
-            "type": "command",
-            "if": "Bash(python *status-board/scripts/status_board.py*)",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"status-board read-only render\"}}'"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""
           }
         ]
       }
