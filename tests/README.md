@@ -39,9 +39,88 @@ rows (full scope only), while prose and a bold line with no list are not. A
 frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)
 reads the template and a migrated board with no drift, so old installs keep
 working. A code fence or a stray backtick no longer hides later backticked
-mentions (which used to show as false "undocumented" drift). Pure Python, no
-LLM. Run with
-`pytest tests/test_status_board.py`.
+mentions (which used to show as false "undocumented" drift).
+
+Off main, the board compares with `origin/main` in throwaway git repos (from
+`plan_repos.py`): a plan active on a branch, or on a detached HEAD, but still
+in backlog on main is flagged as a missed start, also against `origin/master`
+when there is no `origin/HEAD`; one done (or won't-do) on a branch whose
+upstream is gone (merged) but still active on main is a missed finish, while a
+fresh branch is never taken as merged; without a remote main there is no
+check; and a partial clone's missing trees are never fetched (the pack count
+stays the same). Those expecting a row are skipped on git older than 2.44.
+
+The watchdog (`run_watched`) is tested with a fake `git` on `PATH` that runs
+the real one except for a chosen argument, where it starts a `sleep` and waits
+on it (POSIX only): the command gets a "still waiting" line, then is killed at
+the limit — the sleeper too, since the whole process group goes — and an
+interrupt (Ctrl-C) kills both the same way; a child that leaves the group
+leaves no open pipes or zombie behind. Also: the times come from the
+arguments, then `STATUS_BOARD_WARN_SECS` / `STATUS_BOARD_KILL_SECS`, then the
+defaults, and bad values are ignored; a watched command gets no stdin, no
+prompts and no inherited `GIT_DIR`; the heartbeat shortens a long pathspec
+list; `--trace` logs each command with its exit code and time; a missing
+program raises `OSError`; and a hung main check gives the board one
+`main check skipped` row. Pure Python, no LLM. Run with
+`uvx pytest tests/test_status_board.py`.
+
+## status-board — start and finish
+
+`test_plan_readme.py` exercises `plan_readme.py`, which moves a plan's note
+between the sections of `plans/README.md`: from backlog to the end of active
+(off the next list, renumbered), to the top of done or won't-do; `*(none)*` in
+and out; a fallback note when there is none; copies dropped when one is in
+place; no change when nothing is to move or there is no target section; brace
+notes and continuation lines (lazy ones too) move whole; a note that only
+mentions the plan stays; commented items and CRLF are kept; a heading's kind
+is its earliest state word and the shallowest heading of a kind wins.
+
+`test_plan_flow.py` (`check finish`, and the check's contract) and
+`test_plan_start.py` (`check start`: phases main, branch and the branch's own
+copy, the sync question, bring-over) run `plan_flow.py` against throwaway
+repos — a bare "origin", a main checkout and worktrees, with git's global and
+system config switched off. They are converge-style, as Claude works: run the
+check with `--json`, carry out its steps exactly as the skill says (each
+command alone in its directory, stopping at the first failure; each edit
+replacing exactly its old lines), and check again until the outcome is no
+longer a plan; then assert the repo's state. Finish: after the branch did the
+move (nothing to do, local `main` caught up); when it did not (moved, trackers
+deleted in any state, note under done, a made-up note when there is none);
+twice (one commit); `--wont-do`; CRLF kept; live task progress and untracked
+trackers in the main checkout kept; leftover temporary worktrees removed when
+clean and named when not. Start: from the main checkout or a worktree while
+the main checkout is elsewhere or busy (left alone); a missing branch made
+from main; an existing branch merged (never rebased), with or without a
+checkout; a plan written only on its branch brought over; the pair and its
+tracker; uncommitted README, plan and draft edits never pushed; each `--sync`
+answer; a branch only on the remote tracked. Each Blocked scenario returns its
+rule with the facts and changes nothing: diverged or ahead `main`, a done or
+unknown plan (exit 3), a bad or dash-led branch name, a differing copy, no
+active or target section, a branch diverged from its remote. A rejected push
+and a conflicting merge are left to Claude, and the next check explains them.
+The contract itself: the JSON shape, the text form, the recheck step (run from
+the root, never passing `--root`), `check` the only subcommand, the check
+changing nothing, every git it runs a reading command in an allowed shape,
+`core.fsmonitor` off, no signature program run, and a hung git (the fake one
+again) blocking with the facts so far. Run with
+`uvx pytest tests/test_plan_readme.py tests/test_plan_flow.py tests/test_plan_start.py`.
+
+## status-board — auto-approval gate
+
+`test_status_board_hook.py` exercises `hooks/approve_read_only.py`. It approves
+the board render (any args, `--root` included), `plan_flow.py check …` with or
+without a `STATUS_BOARD_WARN_SECS` / `STATUS_BOARD_KILL_SECS` prefix, Windows
+backslash paths and a symlink to the real script. Each approval hole is
+refused, the command only ever passed to the decision function and never run,
+so payloads like `print("PWNED")` cannot execute: `plan_flow.py` without
+`check`, `check` with `--root`; chaining, redirection, substitution, `$`
+expansion, zsh expansions and brace expansion; an attached `-c`, inline code
+and other commands; an interpreter given by path; a same-named script that is
+not this plugin's copy, a symlinked directory with `..`, a relative path even
+from the scripts directory, lookalike script names; other, bad or quoted
+assignments; a trailing newline. Through stdin it prints the `allow` JSON only
+when approved and nothing on bad input. Run with
+`uvx pytest tests/test_status_board_hook.py`.
 
 ## md-optimize — undo store
 
