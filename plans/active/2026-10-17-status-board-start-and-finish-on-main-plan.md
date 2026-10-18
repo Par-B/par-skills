@@ -1922,7 +1922,7 @@ when there is none) · `git add` · `git commit -m "Plans: <base> done|won't do"
 `git push origin HEAD:refs/heads/main` · [temp worktree remove; `git branch -f main`] ·
 recheck. Nothing to do when all is in place. Blocked: main ahead/diverged; README without the
 target section; an unsaved copy or tracker that would be dropped; the plan not on
-`origin/main` (exit 2: "has its branch been merged? fetch first"); a watchdog kill.
+`origin/main` (exit 3: "has its branch been merged? fetch first"); a watchdog kill.
 
 ### Tasks
 
@@ -2095,6 +2095,14 @@ def decide(command):
 hooks.json: `{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""}`
 under the `Bash` matcher. Commit: "status-board: the hook approves only the read-only scripts".
 
+**As built (stricter than the sketch above, after three review rounds that found strings the
+sketch approved which ran arbitrary code — attached `-c`, `${…}`, zsh glob qualifiers and `=(…)`,
+brace expansion, quoted prefixes):** the raw command must match a character allowlist
+(`[A-Za-z0-9_ ./\\:="'-]`, fullmatch) and start with unquoted literals (the two assignments, then
+bare `python3`/`python` — no interpreter by path); the script must be an absolute path whose
+`realpath` is this plugin install's own `status_board.py` or `plan_flow.py`; `plan_flow.py` needs
+`check` and never `--root` (or an abbreviation of it). Everything else prompts.
+
 #### R3: `plan_flow.py check` — the contract, the facts, and finish
 
 **Goal:** `plan_flow.py` becomes read-only: `check finish` works end to end under the contract
@@ -2118,7 +2126,7 @@ above, every subprocess goes through `run_watched`, and all git-changing code is
   missed it (done/, tracker gone, note under done, commit subject `Plans: <base> done`);
   twice (second round `done`, no commit); `--wont-do`; a dirty tracker in the main checkout
   (temporary worktree used, the tracker untouched, the note says so); the plan not on main
-  (exit 2); no done section (Blocked).
+  (exit 3); no done section (Blocked).
 - [ ] A watchdog kill (fake git hanging on `status`, `STATUS_BOARD_KILL_SECS=1`) → exit 5,
   Blocked naming the command and directory, with the facts gathered before it.
 - [ ] Facts include the `origin/main` fetch age and every checkout with its dirty paths.
@@ -2188,7 +2196,7 @@ on each rule; every old start scenario converges to the same end state as before
   on its branch, brought over with `git checkout <commit> -- <path>`; the pair and tracker;
   busy main checkout left alone; uncommitted README/plan/draft edits never pushed).
 - [ ] Each old Blocked scenario returns Blocked with facts and makes no change: diverged,
-  ahead, done plan, unknown (exit 2), bad branch, `--branch main`, differing copy, mid-merge,
+  ahead, done plan, unknown (exit 3), bad branch, `--branch main`, differing copy, mid-merge,
   no active section, draft not committed.
 - [ ] An existing branch behind its remote and lacking main → Question with `merge`,
   `remote`, `both`, `none`; each answer converges as described (`none` → done, branch
