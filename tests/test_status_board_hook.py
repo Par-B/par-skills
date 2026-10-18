@@ -4,18 +4,21 @@ import pathlib
 import subprocess
 import sys
 
-HOOK = (pathlib.Path(__file__).resolve().parents[1]
-        / "plugins/status-board/hooks/approve_read_only.py")
+import pytest
+
+PLUGIN = pathlib.Path(__file__).resolve().parents[1] / "plugins/status-board"
+HOOK = PLUGIN / "hooks/approve_read_only.py"
 
 spec = importlib.util.spec_from_file_location("approve_read_only", HOOK)
 approve = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(approve)
 
-BOARD = "/x/plugins/status-board/skills/status-board/scripts/status_board.py"
+SCRIPTS = PLUGIN / "skills/status-board/scripts"
+BOARD = str(SCRIPTS / "status_board.py")
 # The start/finish skills reach plan_flow.py through their sibling skill dir.
-FLOW = "/x/plugins/status-board/skills/start/../status-board/scripts/plan_flow.py"
-WIN_BOARD = r"C:\Users\x\plugins\status-board\skills\status-board\scripts\status_board.py"
-WIN_FLOW = r"C:\Users\x\plugins\status-board\skills\status-board\scripts\plan_flow.py"
+FLOW = str(PLUGIN / "skills/start/../status-board/scripts/plan_flow.py")
+
+# These strings are only ever passed to decide(); never run them.
 
 
 # ------- approved (read-only) -------
@@ -23,20 +26,22 @@ def test_approves_board_render():
     assert approve.decide(f'python3 "{BOARD}" --scope full')
     assert approve.decide(f'python3 "{BOARD}"')
     assert approve.decide(f'python "{BOARD}" --scope active')   # python fallback
-    assert approve.decide(f'/usr/bin/python3 "{BOARD}" --scope full')
+    assert approve.decide(f"python3 '{BOARD}' --scope full")
 
 
 def test_approves_plan_flow_check():
     assert approve.decide(f'python3 "{FLOW}" check start x --json')
     assert approve.decide(f'python3 "{FLOW}" check finish x --wont-do')
+    assert approve.decide(f'python3 "{SCRIPTS / "plan_flow.py"}" check start x')
     assert approve.decide(f'STATUS_BOARD_KILL_SECS=120 python3 "{FLOW}" check start x --json')
     assert approve.decide(
         f'STATUS_BOARD_WARN_SECS=5 STATUS_BOARD_KILL_SECS=60.5 python3 "{BOARD}" --scope full')
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="backslash paths resolve only on Windows")
 def test_approves_windows_backslash_paths():
-    assert approve.decide(f'python "{WIN_BOARD}" --scope full')
-    assert approve.decide(f'python3 "{WIN_FLOW}" check start x')
+    assert approve.decide(f'python "{BOARD}" --scope full')
+    assert approve.decide(f'python3 "{FLOW}" check start x')
 
 
 # ------- NOT approved: plan_flow.py beyond check -------
@@ -53,8 +58,82 @@ def test_refuses_plan_flow_without_check():
 def test_refuses_chaining_redirection_substitution():
     for tail in ("&& rm -rf ~", "& rm -rf ~", "| sh", "; rm -rf ~",
                  "< /etc/passwd", "> /etc/passwd", "`rm -rf ~`", "$(rm -rf ~)",
-                 "\nrm -rf ~"):
-        assert not approve.decide(f'python3 "{BOARD}" --scope full {tail}'), tail
+                 "\nrm -rf ~", "\rrm", "\tx"):
+        assert not approve.decide(f'python3 "{BOARD}" --scope full {tail}'), repr(tail)
+
+
+# Hole 1: -c glued to code that ends in a comment and the script's suffix.
+def test_refuses_attached_dash_c():
+    assert not approve.decide(
+        """python3 '-cprint("PWNED")#/status-board/scripts/status_board.py'""")
+    assert not approve.decide(
+        """python3 '-cprint("PWNED")#/status-board/scripts/plan_flow.py' check start x""")
+    assert not approve.decide(f'python3 "-c{BOARD}"')
+    assert not approve.decide(f'python3 "-{BOARD}"')
+
+
+# Hole 2: any parameter expansion.
+def test_refuses_dollar_expansion():
+    for cmd in (
+        'python3 "${NOPE:--cprint(\\"PWNED\\")#}/status-board/scripts/status_board.py"',
+        f'python3 $X"{BOARD}"',
+        f'python3 "$PWD/{BOARD}"',
+        f'python3 "{BOARD}" ${{X/a/b}}',
+        f'python3 "{BOARD}" ${{(e)X}}',
+        f'python3 "{BOARD}" $X',
+    ):
+        assert not approve.decide(cmd), cmd
+
+
+# Hole 3: zsh glob qualifiers and process substitution in the args.
+def test_refuses_zsh_expansions_in_args():
+    assert not approve.decide(f"""python3 "{BOARD}" --scope full *(e:'cmd':)""")
+    assert not approve.decide(f'python3 "{BOARD}" --scope =(cmd)')
+    for ch in ("~", "#", "*", "?", "[", "]", "{", "}", "(", ")", "!", ",", "^", "%"):
+        assert not approve.decide(f'python3 "{BOARD}" --scope x{ch}y'), ch
+    assert not approve.decide(f'python3 "{BOARD}" --scope fülle')       # non-ASCII
+
+
+# Hole 4: brace expansion in the interpreter token.
+def test_refuses_brace_expansion_in_interpreter():
+    assert not approve.decide(
+        """{/usr/bin,-cprint\\(\\"PWNED\\"\\)\\#}/python3 '/x/status-board/scripts/status_board.py'""")
+    assert not approve.decide(f'{{python3,python}} "{BOARD}"')
+
+
+# Hole 5: interpreter and script must be pinned.
+def test_refuses_interpreter_with_a_path():
+    assert not approve.decide(f'./python3 "{BOARD}"')
+    assert not approve.decide(f'/tmp/evil/python3 "{BOARD}"')
+    assert not approve.decide(f'/usr/bin/python3 "{BOARD}"')
+    assert not approve.decide(f'python3.12 "{BOARD}"')
+
+
+def test_refuses_script_that_is_not_this_plugins_copy(tmp_path):
+    evil = tmp_path / "status-board/scripts"
+    evil.mkdir(parents=True)
+    (evil / "status_board.py").write_text("")
+    (evil / "plan_flow.py").write_text("")
+    assert not approve.decide(f'python3 "{evil / "status_board.py"}"')
+    assert not approve.decide(f'python3 "{evil / "plan_flow.py"}" check start x')
+    assert not approve.decide('python3 /x/plugins/status-board/skills/status-board/scripts/status_board.py')
+    assert not approve.decide('python3 status-board/scripts/status_board.py')       # relative
+    assert not approve.decide('python3 ./status-board/scripts/status_board.py')
+
+
+def test_refuses_symlinked_dir_with_dotdot(tmp_path):
+    # The OS follows L, so L/.. is <tmp>/a, not <tmp>: textual normalization lies.
+    (tmp_path / "a/deep").mkdir(parents=True)
+    evil = tmp_path / "a/status-board/scripts"
+    evil.mkdir(parents=True)
+    (evil / "status_board.py").write_text("")
+    (tmp_path / "L").symlink_to(tmp_path / "a/deep")
+    assert not approve.decide(f'python3 "{tmp_path}/L/../status-board/scripts/status_board.py"')
+
+
+def test_approves_symlink_to_the_real_script(tmp_path):
+    (tmp_path / "link.py").symlink_to(BOARD)
+    assert approve.decide(f'python3 "{tmp_path / "link.py"}"')
 
 
 # ------- NOT approved: environment prefixes -------
@@ -69,16 +148,14 @@ def test_refuses_other_or_bad_assignments():
 
 # ------- NOT approved: other scripts and interpreters -------
 def test_refuses_lookalike_scripts():
-    assert not approve.decide('python3 /x/status-board/scripts/status_board_evil.py')
-    assert not approve.decide('python3 /x/status-board/scripts/evil_status_board.py')
-    assert not approve.decide('python3 /x/my-status-board/scripts/status_board.py')
+    assert not approve.decide(f'python3 "{SCRIPTS / "status_board_evil.py"}"')
+    assert not approve.decide(f'python3 "{SCRIPTS / "plan_readme.py"}"')
     assert not approve.decide('python3 /x/status_board.py')
-    assert not approve.decide('python3 /x/status-board/scripts/plan_readme.py')
 
 
 def test_refuses_inline_code_and_other_commands():
-    assert not approve.decide('python3 -c "import os; os.system(1)"')
-    assert not approve.decide(f'python3 -c "print(1)" "{BOARD}"')
+    assert not approve.decide('python3 -c "import os"')
+    assert not approve.decide(f'python3 -c "print" "{BOARD}"')
     assert not approve.decide(f'python3 -I "{BOARD}"')
     assert not approve.decide(f'bash "{BOARD}"')
     assert not approve.decide('python3')
@@ -110,7 +187,10 @@ def test_stdin_emits_allow_only_when_approved():
 
 
 def test_stdin_bad_input_prints_nothing():
-    for stdin in ("not json", "", "[]", json.dumps({"tool_input": None})):
+    for stdin in ("not json", "", "[]", json.dumps({"tool_input": None}),
+                  json.dumps({"tool_input": "x"}), json.dumps({"tool_input": [1]}),
+                  json.dumps({"tool_input": {"command": 5}})):
         r = _run_hook(stdin)
         assert r.returncode == 0, stdin
         assert r.stdout.strip() == "", stdin
+        assert r.stderr == "", stdin
