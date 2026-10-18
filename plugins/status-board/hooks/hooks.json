@@ -1,5 +1,5 @@
 {
-  "description": "Auto-approve ONLY the status-board plugin's read-only scripts so viewing the board and running /status-board:start or /status-board:finish isn't interrupted by prompts for commands that change nothing. The `if` filters (Bash(python*) and Bash(STATUS_BOARD_*), for the watchdog-timer prefix) only spare unrelated commands the script; they approve nothing. Delegates to approve_read_only.py, which approves exactly one plain invocation, by bare unquoted python3 or python (optionally prefixed by unquoted STATUS_BOARD_WARN_SECS=<n> / STATUS_BOARD_KILL_SECS=<n>, the watchdog's timers), of THIS plugin install's own copy (an absolute script path that must resolve, symlinks followed, to the file shipped next to this hook) of: status_board.py (renders the board; any args) and plan_flow.py check ... (reads only — no fetch, no network, no write — and prints the facts and the steps to run). Never approved, so they still prompt: plan_flow.py with no subcommand or any subcommand other than check; plan_flow.py check with --root (another directory's git config could run commands under git status); every git command, push and README edit the check prints for Claude to carry out; a same-named script anywhere else or a relative script path; an interpreter given by path or in quotes; any other or quoted environment assignment; any command containing a character outside letters, digits, space and _ . / \\ : = \" ' - (so no chaining, redirection, $ expansion, braces, globs, ~ or substitution). Consent is granted at plugin install/trust time; delete this file to opt out (the skills still work, you'll just approve each script call).",
+  "description": "Auto-approve ONLY the status-board plugin's read-only scripts so viewing the board and running /status-board:start or /status-board:finish isn't interrupted by prompts for commands that change nothing. The `if` filters (Bash(python*) and Bash(STATUS_BOARD_*), for the watchdog-timer prefix) only spare unrelated commands the script; they approve nothing. Delegates to approve_read_only.py (run by python3, or by python where there is no python3: the shell's not-found exit 127 starts the fallback, and the event on stdin is still unread), which approves exactly one plain invocation, by bare unquoted python3 or python (optionally prefixed by unquoted STATUS_BOARD_WARN_SECS=<n> / STATUS_BOARD_KILL_SECS=<n>, the watchdog's timers), of THIS plugin install's own copy (an absolute script path that must resolve, symlinks followed, to the file shipped next to this hook) of: status_board.py (renders the board; any args) and plan_flow.py check ... (reads only — no fetch, no network, no write — and prints the facts and the steps to run). Never approved, so they still prompt: plan_flow.py with no subcommand or any subcommand other than check; plan_flow.py check with --root (another directory's git config could run commands under git status); every git command, push and README edit the check prints for Claude to carry out; a same-named script anywhere else or a relative script path; an interpreter given by path or in quotes; any other or quoted environment assignment; any command containing a character outside letters, digits, space and _ . / \\ : = \" ' - (so no chaining, redirection, $ expansion, braces, globs, ~ or substitution). Consent is granted at plugin install/trust time; delete this file to opt out (the skills still work, you'll just approve each script call).",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,12 +8,12 @@
           {
             "type": "command",
             "if": "Bash(python*)",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\" 2>/dev/null || python \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""
           },
           {
             "type": "command",
             "if": "Bash(STATUS_BOARD_*)",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\" 2>/dev/null || python \"${CLAUDE_PLUGIN_ROOT}/hooks/approve_read_only.py\""
           }
         ]
       }

@@ -46,6 +46,8 @@ SUFFIXES = ("-design", "-plan")
 TERMINAL = ("done", "wont-do")
 KINDS = ("active", "next", "backlog", "future-ideas", "done", "wont-do")
 LOCAL, PUSH = 10, 120                 # step time limits, seconds
+HOOKED = 120                          # a step that runs the repo's hooks (commit, merge)
+HOOK_NOTE = "a timeout is most likely one of the repo's hooks (or LFS)"
 CONTEXT = 3                           # lines of context around an edit
 SHOW = 3                              # paths named per list in a fact
 LOG_FORMAT = "--format=%x01%h%x02%P%x02%s"
@@ -244,12 +246,7 @@ def listed(found):
 
 def mentions(text, stems):
     """The `stems` that `text` names anywhere, backticked or as a .md filename."""
-    found = set()
-    for rx in (sb.BACKTICK_RE, sb.MD_TOKEN_RE):
-        for m in rx.finditer(text):
-            tok = (m.group(1) if rx is sb.BACKTICK_RE else m.group(0)).strip()
-            found |= {sb.stem(t.rsplit("/", 1)[-1]) for t in sb.brace_expand(tok)}
-    return found & set(stems)
+    return {s.rsplit("/", 1)[-1] for s in sb.mentioned_stems(text)} & set(stems)
 
 
 def fallback_note(found, base, first_text):
@@ -310,8 +307,10 @@ def worktrees(g, top):
     return out
 
 
-def checkout_facts(g, facts, wts, plans, guarded):
-    """Add each checkout's dirt to `wts` and to the facts."""
+def checkout_facts(g, facts, wts, plans, guarded, relevant):
+    """Add each checkout's dirt to `wts` and to the facts — only for those
+    `relevant(w)` names (the main checkout, the plan's branch, temporary
+    ones); the others are listed by path and branch alone."""
     for w in wts:
         on = f"on {w['branch']}" if w["branch"] else "detached"
         if w["prunable"] or not os.path.isdir(w["path"]):
@@ -319,6 +318,11 @@ def checkout_facts(g, facts, wts, plans, guarded):
             facts.append(f"checkout {w['path']} {on}: its folder is missing (prunable)")
             continue
         w["missing"] = False
+        if not relevant(w):
+            w.update(guarded=[], outside=[], merging=False)
+            facts.append(f"checkout {w['path']} {on}: not looked at (not main, the plan's "
+                         f"branch or a temporary checkout)")
+            continue
         w["guarded"] = changed(g, w["path"], "--untracked-files=all", "--", *guarded)
         w["outside"] = changed(g, w["path"], "--untracked-files=no", "--", ".",
                                f":(exclude){plans}")
@@ -335,11 +339,12 @@ def checkout_facts(g, facts, wts, plans, guarded):
         facts.append(f"checkout {w['path']} {on}: {'; '.join(dirt) or 'clean'}")
 
 
-def survey(g, facts, top, plans, base):
+def survey(g, facts, top, plans, base, branches=()):
     """Read what both checks start from, adding facts as it goes: the main
     branch and origin/main, local main ahead/behind (and its commits when
-    ahead), every checkout, origin/main's plans/ tree, the plan's files here
-    and there, and the README there. Returns them as a dict."""
+    ahead), every checkout (the dirt of main's, of the plan's `branches`' and
+    of temporary ones), origin/main's plans/ tree, the plan's files here and
+    there, and the README there. Returns them as a dict."""
     prefix = sb.REMOTE_PREFIX
     ref = sb.pick_main_ref(lambda *args: g(top, *args)) or ""
     main = ref[len(prefix):] if ref.startswith(prefix) else "main"
@@ -366,7 +371,9 @@ def survey(g, facts, top, plans, base):
         s["mine"] = commits(g, top, f"{upstream}..{s['local']}")
         facts.append(f"local {main}'s commits not on {on}: {listed(s['mine'])}")
     s["wts"] = worktrees(g, top)
-    checkout_facts(g, facts, s["wts"], plans, guarded_paths(plans, base))
+    checkout_facts(g, facts, s["wts"], plans, guarded_paths(plans, base),
+                   lambda w: (w["branch"] in (main, *branches)
+                              or os.path.basename(w["path"]).startswith("status-board-")))
     s["mc"] = next((w for w in s["wts"] if w["branch"] == main), None)
     s["tree"] = tree = tree_of(g, top, upstream, plans)
     here = find_pair(lambda p: os.path.isfile(os.path.join(top, p)), plans, base)
@@ -487,18 +494,23 @@ def leftovers(g, facts, s, top, plans, base, temp, target):
     for w in s["wts"]:
         if not os.path.basename(w["path"]).startswith("status-board-"):
             continue
-        loose = [] if w["missing"] else changed(g, w["path"], "--untracked-files=all")
-        ahead = commits(g, top, f"{s['upstream']}..{w['head']}") if w["head"] else []
-        facts.append(f"leftover temporary worktree {w['path']}: HEAD "
-                     f"{(w['head'] or '?')[:7]}, {len(ahead)} commit(s) not on {s['on']}"
-                     + (f" ({listed(ahead)})" if ahead else "")
-                     + f"; {'changes: ' + names(loose) if loose else 'no uncommitted changes'}")
-        if not temp or os.path.realpath(w["path"]) != temp:
-            continue
-        look = f"git -C {shlex.quote(temp)}"
         entries = ([] if w["missing"] else
                    g.run(w["path"], "status", "--porcelain", "--no-renames",
                          "--untracked-files=all").stdout.splitlines())
+        loose = [e[3:] for e in entries if e[3:]]
+        ours = bool(temp) and os.path.realpath(w["path"]) == temp
+        rng = f"{s['upstream']}..{w['head']}"
+        # only this check's own temporary worktree needs its commits read
+        ahead = commits(g, top, rng) if w["head"] and ours else []
+        count = len(ahead) if ours else (int(g(top, "rev-list", "--count", rng) or 0)
+                                         if w["head"] else 0)
+        facts.append(f"leftover temporary worktree {w['path']}: HEAD "
+                     f"{(w['head'] or '?')[:7]}, {count} commit(s) not on {s['on']}"
+                     + (f" ({listed(ahead)})" if ahead else "")
+                     + f"; {'changes: ' + names(loose) if loose else 'no uncommitted changes'}")
+        if not ours:
+            continue
+        look = f"git -C {shlex.quote(temp)}"
 
         def unwritten(entry):
             """A tracked file a cut-off checkout left missing, or wrote but
@@ -595,11 +607,14 @@ def busy_main(g, facts, s, top, target, verb):
     clash = []
     if mc and not busy and s["behind"]:
         # an ff-only merge refuses when it would touch a file with uncommitted
-        # changes: other plans' files count too
+        # changes or overwrite an untracked one: other plans' files and
+        # untracked files anywhere count too
         incoming = {p for *_, paths in commits(g, top, f"{s['local']}..{s['upstream']}")
                     for p in paths}
-        clash = [p for p in changed(g, mc["path"], "--untracked-files=all", "--",
-                                    f"{s['plans']}/") if p in incoming]
+        entries = g.run(mc["path"], "status", "--porcelain", "--no-renames",
+                        "--untracked-files=all").stdout.splitlines()
+        clash = [e[3:] for e in entries if e[3:] in incoming
+                 and (e[:2] == "??" or e[3:].startswith(f"{s['plans']}/"))]
         busy = bool(clash)
     if busy:
         dirt = mc["guarded"] + mc["outside"]
@@ -647,7 +662,8 @@ def enter_steps(s, w, top, change):
                               f"again and it says how to clear it", PUSH))
     if w["mc"] and not w["busy"] and s["behind"]:
         steps.append(run_step(w["work"], ["git", "merge", "--ff-only", "--no-autostash", on],
-                              f"the {s['main']} checkout is at {on} ({s['upstream'][:7]})"))
+                              f"the {s['main']} checkout is at {on} ({s['upstream'][:7]}); "
+                              f"{HOOK_NOTE}", HOOKED))
     return steps
 
 
@@ -663,7 +679,7 @@ def publish_steps(s, w, top, msg, touched):
                     f"will see this commit on local {main} and say what to do")
     steps = [run_step(work, ["git", "commit", "-m", msg, "--", *touched],
                       f"one commit \"{msg}\" on {s['upstream'][:7]}, holding only those "
-                      f"paths"),
+                      f"paths; {HOOK_NOTE}", HOOKED),
              run_step(work, ["git", "push", REMOTE, f"HEAD:refs/heads/{main}"],
                       f"{on} at the new commit; {rejected}", PUSH)]
     if temp:
@@ -773,9 +789,11 @@ def task_tally(g, facts, top, s, plans, found):
         try:
             data = json.loads(text)
             tasks = data.get("tasks", []) if isinstance(data, dict) else data
+            if not isinstance(tasks, list):
+                raise ValueError("not a task list")
             statuses = [t.get("status") for t in tasks if isinstance(t, dict)]
-        except (ValueError, AttributeError):
-            facts.append(f"the tracker {rel} can't be read as JSON")
+        except (ValueError, AttributeError, TypeError):
+            facts.append(f"the tracker {rel} is unreadable")
             continue
         total += len(statuses)
         open_ += sum(st not in CLOSED_STATUSES for st in statuses)
@@ -797,10 +815,10 @@ def plan_started(g, top, s, plans):
 def branch_merged(g, top, s, name, started):
     """(proof, None) when branch `name` is shown merged into origin/main here,
     with work done after the plan's start (`started`): its local or remote
-    tip is past the start and in origin/main, or its local tip is past the
-    start and its upstream is gone after a merge. Else (None, what is
-    missing): a branch made at the start, or an old one of the same name
-    from before it, proves nothing."""
+    tip is past the start and in origin/main. Else (None, what is missing):
+    a branch made at the start, or an old one of the same name from before
+    it, proves nothing — nor does an upstream that is gone (a PR closed
+    unmerged loses its branch too)."""
     on, upstream = s["on"], s["upstream"]
 
     def contains(a, b):                   # a is an ancestor of b, or b itself
@@ -816,8 +834,6 @@ def branch_merged(g, top, s, name, started):
             return f"{label} is in {on}", None
     track = (g(top, "for-each-ref", "--format=%(upstream:track)", f"refs/heads/{name}")
              if local else None)
-    if track == "[gone]" and past_start(local):
-        return f"{name}'s upstream is gone after a merge", None
     if not local and not remote:
         return None, (f"{name} exists nowhere (not here, not on {REMOTE}); a squash-merged, "
                       f"deleted branch can't be told apart from one never made")
@@ -835,7 +851,9 @@ def branch_merged(g, top, s, name, started):
         else:
             ahead = int(g(top, "rev-list", "--count", f"{upstream}..{tip}") or 0)
             rows.append(f"{label} has {ahead} commit(s) not in {on}")
-    if local:
+    if track == "[gone]":
+        rows.append("its upstream is gone — merged or closed? check the PR with gh")
+    elif local:
         rows.append(f"its upstream is {track or 'not set'}")
     return None, f"{name}: " + ", ".join(rows)
 

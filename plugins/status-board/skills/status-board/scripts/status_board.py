@@ -291,12 +291,7 @@ def parse_readme(path):
         return notes, documented, table
     text = text.replace("\r\n", "\n").replace("\r", " ")
     # Anything mentioned anywhere counts as "documented": .md tokens + backticked slugs.
-    for tok in MD_TOKEN_RE.findall(text):
-        for exp in brace_expand(tok):
-            documented.add(stem(exp))
-    for bt in BACKTICK_RE.findall(text):
-        for exp in brace_expand(bt.strip()):
-            documented.add(stem(exp))
+    documented |= mentioned_stems(text)
     # Table rows define plan entries + their notes (used for stale + descriptions).
     for line in text.splitlines():
         if "|" not in line:
@@ -325,16 +320,39 @@ def parse_readme(path):
     return notes, documented, table
 
 
+def _first_token(text):
+    """The first backticked slug or .md filename/link in `text`, or None."""
+    hits = [m for m in (BACKTICK_RE.search(text), MD_TOKEN_RE.search(text)) if m]
+    if not hits:
+        return None
+    m = min(hits, key=lambda h: h.start())
+    return (m.group(1) if m.re is BACKTICK_RE else m.group(0)).strip()
+
+
 def item_slug(text):
     """The plan a next-list item names: its first backticked slug or .md
     filename/link, whichever comes first, reduced to a bare stem (a path like
     backlog/foo.md -> foo). "" when the item names none."""
-    hits = [m for m in (BACKTICK_RE.search(text), MD_TOKEN_RE.search(text)) if m]
-    if not hits:
-        return ""
-    m = min(hits, key=lambda h: h.start())
-    tok = m.group(1) if m.re is BACKTICK_RE else m.group(0)
-    return stem(tok.strip().rsplit("/", 1)[-1])
+    tok = _first_token(text)
+    return stem(tok.rsplit("/", 1)[-1]) if tok else ""
+
+
+def item_slugs(text):
+    """Every plan a list item names: item_slug's token, with a {a,b} group
+    brace-expanded, each reduced to a bare stem. set() when it names none."""
+    tok = _first_token(text)
+    return {stem(t.rsplit("/", 1)[-1]) for t in brace_expand(tok)} if tok else set()
+
+
+def mentioned_stems(text):
+    """Every stem `text` names anywhere — .md tokens and backticked slugs,
+    brace-expanded — paths kept (backlog/foo.md -> backlog/foo)."""
+    found = set()
+    for tok in MD_TOKEN_RE.findall(text):
+        found |= {stem(exp) for exp in brace_expand(tok)}
+    for bt in BACKTICK_RE.findall(text):
+        found |= {stem(exp) for exp in brace_expand(bt.strip())}
+    return found
 
 
 def names_next_order(text):
@@ -450,6 +468,8 @@ def git_out(root, *args):
     remote. run_watched drops an inherited GIT_DIR and the like, so `-C root`
     always means root's repo; a hung git raises Watchdog."""
     try:
+        # absolute: with cwd=root as well, a relative -C would be applied twice
+        root = os.path.abspath(root)
         p = run_watched(["git", "--no-lazy-fetch", "-C", root, *args], root)
     except OSError:                                # no git
         return None
@@ -457,8 +477,9 @@ def git_out(root, *args):
 
 
 def merged(root, head):
-    """Whether branch `head` looks merged: its upstream is gone from the remote
-    (a merged pull request's branch usually is). A fresh or detached HEAD
+    """Whether branch `head` may be merged: its upstream is gone from the
+    remote (a merged pull request's branch usually is — but so is a closed
+    one's, so the rows built on this are hints). A fresh or detached HEAD
     never counts, even at or behind main."""
     return bool(head) and git_out(root, "for-each-ref", "--format=%(upstream:track)",
                                   f"refs/heads/{head}") == "[gone]"
@@ -487,13 +508,13 @@ def main_drift(root, plans):
     """[(stem, message)] for a start or finish missed on the main branch, when
     the board is rendered on another branch or in a worktree: this checkout's
     plans/ against the remote's main as last fetched (read-only; no fetch).
-    [] with no git or remote, or on the main branch itself. On a branch that
-    looks merged, a plan active here and on main gets a "run finish" row too:
-    a plan is marked done on main after the merge. A squash-merged
-    branch is seen as merged only once its upstream is gone locally (`git fetch
-    --prune`); a stale origin/main can give a needless "run finish" row (finish
-    is idempotent). A git stopped by the watchdog gives one row saying the
-    check was skipped."""
+    [] with no git or remote, or on the main branch itself. On a branch whose
+    upstream is gone, its own plan (slug = branch name) active here and on
+    main gets a hint row — "if its PR was merged, run finish": a plan is
+    marked done on main after the merge, and a closed PR's branch is gone
+    too. The upstream shows as gone only after `git fetch --prune`; a stale
+    origin/main can give a needless row (finish is idempotent). A git
+    stopped by the watchdog gives one row saying the check was skipped."""
     try:
         return _main_drift(root, plans)
     except Watchdog as e:
@@ -523,15 +544,26 @@ def _main_drift(root, plans):
                 for f in plan_files(os.path.join(plans, state))
                 if on_main.get(stem(f)) in ("active", "backlog")]
     # a plan is marked done on main after the merge, so a merged branch
-    # usually still has it active, as main does
+    # usually still has it active, as main does — but only this branch's own
+    # plan (its slug is the branch's name) is a hint for this branch
     still = [stem(f) for f in plan_files(os.path.join(plans, "active"))
-             if on_main.get(stem(f)) == "active"]
+             if on_main.get(stem(f)) == "active" and plan_slug(stem(f)) == head]
+    # a gone upstream is a hint, not proof: a PR closed unmerged loses its branch too
+    gone = "this branch's upstream is gone — if its PR was merged, run /status-board:finish"
     if (finished or still) and merged(root, head):
-        rows += [(s, f"{state} here and merged, still {there} on {main}"
-                     f" — run /status-board:finish") for s, state, there in finished]
-        rows += [(s, f"active here and on {main}, and this branch looks merged"
-                     f" — run /status-board:finish") for s in still]
+        rows += [(s, f"{state} here, still {there} on {main}; {gone}")
+                 for s, state, there in finished]
+        rows += [(s, f"active here and on {main}; {gone}") for s in still]
     return rows
+
+
+def plan_slug(name):
+    """A plan stem's default branch name: no date, no -design/-plan suffix."""
+    for suffix in ("-design", "-plan"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return DATE_RE.sub("", name)
 
 
 def find_root(start):

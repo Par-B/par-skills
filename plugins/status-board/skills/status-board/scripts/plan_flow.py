@@ -20,14 +20,15 @@ check finish <plan>: after the plan's branch is merged, the plan's files
     belong in done/ (or wont-do/) on the remote's main, its *.tasks.json
     trackers gone and its note in that section of plans/README.md, off the
     "next … order" list; one commit, pushed. A gate first: the move is
-    planned only when every branch of the plan (the slug's, and each
-    --branch) is shown merged here, with work after the plan's start (the
+    planned only when every branch of the plan (each --branch, else the
+    slug's) is shown merged here, with work after the plan's start (the
     latest commit made on origin/main that touched it in active/): its tip
-    is past the start and in origin/main, or past the start with its
-    upstream gone after a merge — or with --prs-merged (Claude saw every
-    PR merged with gh: a squash merge leaves no trace here) or --confirm
-    (the user said the plan is finished). --wont-do needs --confirm. The
-    trackers' open tasks are counted in the facts.
+    is past the start and in origin/main. A gone upstream proves nothing (a
+    PR closed unmerged loses its branch too). Otherwise --prs-merged (Claude
+    saw every PR merged with gh: a squash merge leaves no trace here) or
+    --confirm (the user said the plan is finished). --wont-do needs
+    --confirm. No gate when main already has the plan in done/ or wont-do/.
+    The trackers' open tasks are counted in the facts.
 The work on main happens in the main checkout when it is on main with no
 uncommitted changes outside plans/ and none (untracked included) to the
 README or the plan's files and trackers (nor, when it is behind, to files
@@ -60,17 +61,17 @@ import sys
 
 import plan_readme
 import status_board as sb
-from plan_check import (NEVER, NOT_FOUND, REMOTE, SLOW, TERMINAL, Blocked, Git,
-                        ahead_rule, branch_merged, busy_main, changed, enter_steps,
-                        fallback_note, find_pair, leave_steps, move_steps, moves_to,
-                        names, plan_base, plan_started, publish_steps, readme_steps, render,
-                        run_step, survey, task_tally, temp_path, text_of, tree_of,
-                        with_note, workspace)
+from plan_check import (HOOK_NOTE, HOOKED, NEVER, NOT_FOUND, REMOTE, SLOW, TERMINAL,
+                        Blocked, Git, ahead_rule, branch_merged, busy_main, changed,
+                        enter_steps, fallback_note, find_pair, leave_steps, move_steps,
+                        moves_to, names, plan_base, plan_started, publish_steps,
+                        readme_steps, render, run_step, survey, task_tally, temp_path,
+                        text_of, tree_of, with_note, workspace)
 
 
 def finish(g, facts, top, plans, base, args):
     """(outcome, steps, question) for finishing plan `base` on main."""
-    s = survey(g, facts, top, plans, base)
+    s = survey(g, facts, top, plans, base, plan_branches(base, args.branch))
     # the ahead rule goes first, but tells this check's own commits apart only
     # by what the plan makes; a rule failing on the way waits until after it
     try:
@@ -82,10 +83,14 @@ def finish(g, facts, top, plans, base, args):
         raise later
     to, plan, drops, new = goal["to"], goal["plan"], goal["drops"], goal["new"]
     on, found, text, readme = s["on"], s["found"], s["text"], s["readme"]
-    stems = {sb.stem(f) for _, f in found}
+    stems = goal["stems"]
     tally = task_tally(g, facts, top, s, plans, found)
     change = bool(plan or drops or new != text)
-    if change:
+    if change and goal["ended"]:
+        # main already records the decision; what is left is tidying
+        facts.append(f"main already has it in {to}/: no proof of a merge is needed for "
+                     f"what is left (its tracker or note)")
+    elif change:
         finish_gate(g, facts, top, s, base, args, to, tally)
     w = workspace(g, facts, s, top, plans, base, goal["target"], "finish")
 
@@ -124,7 +129,7 @@ def finish_gate(g, facts, top, s, base, args, to, tally):
     if args.prs_merged:
         facts.append("--prs-merged: Claude confirmed the PRs are merged")
         return
-    names_ = list(dict.fromkeys([sb.DATE_RE.sub("", base)] + (args.branch or [])))
+    names_ = plan_branches(base, args.branch)
     started = plan_started(g, top, s, s["plans"])
     missing = []
     for name in names_:
@@ -176,8 +181,13 @@ def finish_goal(g, facts, top, plans, base, wont_do, s):
     target = {src: None for _, src, _ in plan} | {p: None for p in drops}
     target |= {dst: text_of(g, top, tree, src) for how, src, dst in plan if how == "mv"}
     target[readme] = new
-    return {"to": to, "plan": plan, "drops": drops, "new": new,
-            "target": with_note(target, readme, to, stems)}
+    return {"to": to, "plan": plan, "drops": drops, "new": new, "stems": stems,
+            "ended": bool(ended), "target": with_note(target, readme, to, stems)}
+
+
+def plan_branches(base, named):
+    """The plan's branches: the ones named with --branch, else the slug's."""
+    return list(dict.fromkeys(named)) if named else [sb.DATE_RE.sub("", base)]
 
 
 def require_section(s, kind):
@@ -207,9 +217,9 @@ def noted(text, stems, to, fallback, readme, on):
 
 def start(g, facts, top, plans, base, name, sync):
     """(outcome, steps, question) for the next phase of starting plan `base`."""
-    s = survey(g, facts, top, plans, base)
-    main = s["main"]
     name = name or sb.DATE_RE.sub("", base)
+    s = survey(g, facts, top, plans, base, [name])
+    main = s["main"]
     if name.startswith("-"):
         raise Blocked(f"{name!r} is not a valid branch name",
                       "the check refuses a name starting with \"-\" (it would read as an "
@@ -565,13 +575,15 @@ def sync_steps(top, s, b, base, todo):
     if "remote" in todo:
         steps.append(run_step(work, ["git", "merge", "--ff-only", "--no-autostash",
                                      f"{REMOTE}/{name}"],
-                              f"{name} at {REMOTE}/{name} ({b['remote'][:7]})"))
+                              f"{name} at {REMOTE}/{name} ({b['remote'][:7]}); {HOOK_NOTE}",
+                              HOOKED))
     if "merge" in todo:
         steps.append(run_step(work, ["git", "merge", "--no-edit", "--no-autostash", "-m",
                                      f"Merge {s['main']} into {name}", on],
                               f"{name} has {on} ({s['upstream'][:7]}) merged in, its own "
                               f"commits kept, not pushed; on a conflict stop: the next "
-                              f"check says how to finish or abort the merge"))
+                              f"check says how to finish or abort the merge; {HOOK_NOTE}",
+                              HOOKED))
     return around(top, b, base, work, temp, steps)
 
 
@@ -611,7 +623,8 @@ def copy_steps(g, facts, top, plans, base, s, b, tree, leave):
     steps += readme_steps(work, readme, text, new, stems, review, touched)
     msg = f"Plans: start {base}"
     steps.append(run_step(work, ["git", "commit", "-m", msg, "--", *touched],
-                          f"one commit \"{msg}\" on {name}, holding only those paths"))
+                          f"one commit \"{msg}\" on {name}, holding only those paths; "
+                          f"{HOOK_NOTE}", HOOKED))
     facts.append(f"the commit on {name} is not pushed")
     return around(top, b, base, work, temp, steps)
 
@@ -628,10 +641,21 @@ def recheck(args):
                                  ("--prs-merged", args.prs_merged)) if on]
     for flag, value in (("--warn", args.warn), ("--timeout", args.timeout)):
         if value:
-            argv += [flag, f"{value:g}"]
+            argv += [flag, value]         # as given: "30" stays "30", never 3e+01
     argv += [f for f, on in (("--trace", args.trace), ("--json", args.json)) if on]
     # no --root: the hook refuses it, so the recheck runs from that directory
     return {"kind": "recheck", "cwd": os.path.abspath(args.root or "."), "argv": argv}
+
+
+def seconds(text):
+    """A positive number of seconds, kept as the text given (for the recheck)."""
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    if not 0 < value < float("inf"):
+        raise argparse.ArgumentTypeError(f"not a positive number of seconds: {text!r}")
+    return text
 
 
 def main():
@@ -639,8 +663,9 @@ def main():
     common.add_argument("plan")
     common.add_argument("--root", help="any directory inside the project (default: here)")
     common.add_argument("--json", action="store_true", help="print one JSON object")
-    common.add_argument("--warn", type=float, help="seconds before a 'still waiting' line")
-    common.add_argument("--timeout", type=float, help="seconds before a command is stopped")
+    common.add_argument("--warn", type=seconds, help="seconds before a 'still waiting' line")
+    common.add_argument("--timeout", type=seconds,
+                        help="seconds before a command is stopped")
     common.add_argument("--trace", action="store_true", help="log every command it runs")
     # no abbreviations: the approval hook refuses --root by its full name only
     ap = argparse.ArgumentParser(description="Check a plan's start or finish on main; "
@@ -659,15 +684,15 @@ def main():
     f.add_argument("--wont-do", action="store_true",
                    help="the plan was dropped: wont-do/ instead of done/ (needs --confirm)")
     f.add_argument("--branch", action="append",
-                   help="another branch of the plan, all of which must be merged "
-                        "(repeatable; the slug's branch is always included)")
+                   help="a branch of the plan, all of which must be merged (repeatable; "
+                        "default: the plan's slug without date and suffix)")
     f.add_argument("--confirm", action="store_true",
                    help="the user explicitly said the plan is finished")
     f.add_argument("--prs-merged", action="store_true",
                    help="Claude looked the plan's PRs up with gh: every one is merged")
     args = ap.parse_args()
     base = plan_base(args.plan)
-    g = Git(args.warn, args.timeout, args.trace)
+    g = Git(args.warn and float(args.warn), args.timeout and float(args.timeout), args.trace)
     facts, outcome, steps, question, blocked, code = [], "blocked", [], None, None, 5
     root = args.root or "."
     try:

@@ -89,17 +89,6 @@ def _layout(lines):
     return secs, hidden, {i for i, _, _ in heads}, owner
 
 
-def _item_stems(text):
-    """The plan stems a list item names: its first backticked slug or .md
-    filename, brace-expanded, each reduced to a bare stem."""
-    hits = [m for m in (sb.BACKTICK_RE.search(text), sb.MD_TOKEN_RE.search(text)) if m]
-    if not hits:
-        return set()
-    m = min(hits, key=lambda h: h.start())
-    tok = (m.group(1) if m.re is sb.BACKTICK_RE else m.group(0)).strip()
-    return {sb.stem(t.rsplit("/", 1)[-1]) for t in sb.brace_expand(tok)}
-
-
 def _continues(line):
     """True when a non-blank line after an item goes on with it: indented, or
     an unindented (lazy) line that starts nothing new."""
@@ -124,7 +113,7 @@ def _items(lines, kind, layout):
         while (j < end and j not in hidden and j not in headings
                and _continues(lines[j])):
             j += 1
-        out.append((i, j, _item_stems(m.group(1))))
+        out.append((i, j, sb.item_slugs(m.group(1))))
         i = j
     return out
 

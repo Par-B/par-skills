@@ -220,6 +220,29 @@ def test_stdin_emits_allow_only_when_approved():
     assert refused.stdout.strip() == ""      # no decision → normal prompt
 
 
+def _hook_command():
+    """The one command hooks.json runs (every `if` entry runs the same)."""
+    entries = json.loads((PLUGIN / "hooks/hooks.json").read_text(encoding="utf-8"))
+    commands = {h["command"] for h in entries["hooks"]["PreToolUse"][0]["hooks"]}
+    assert len(commands) == 1, commands
+    return commands.pop()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the hook command under /bin/sh")
+@pytest.mark.parametrize("names", [("python3",), ("python",), ("python3", "python")])
+def test_the_hook_command_runs_with_python3_or_only_python(tmp_path, names):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in names:                    # a PATH holding just these interpreters
+        (bin_dir / name).symlink_to(pathlib.Path(sys.executable).resolve())
+    p = subprocess.run(["/bin/sh", "-c", _hook_command()],
+                       input=_payload(f'python3 "{FLOW}" check start x --json'),
+                       capture_output=True, text=True,
+                       env={"PATH": str(bin_dir), "CLAUDE_PLUGIN_ROOT": str(PLUGIN)})
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
 def test_stdin_bad_input_prints_nothing():
     for stdin in ("not json", "", "[]", json.dumps({"tool_input": None}),
                   json.dumps({"tool_input": "x"}), json.dumps({"tool_input": [1]}),

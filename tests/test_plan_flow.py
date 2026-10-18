@@ -439,7 +439,9 @@ def test_json_follows_the_contract(tmp_path):
     assert all(os.path.isabs(s["cwd"]) and s["expect"] for s in runs)
     push = next(s for s in runs if s["argv"][:2] == ["git", "push"])
     assert push["argv"] == ["git", "push", "origin", "HEAD:refs/heads/main"]
-    assert push["limit"] == 120 and {s["limit"] for s in runs if s is not push} == {10}
+    commit_ = next(s for s in runs if s["argv"][:2] == ["git", "commit"])
+    assert push["limit"] == 120 and commit_["limit"] == 120
+    assert {s["limit"] for s in runs if s not in (push, commit_)} == {10}
     commit = next(s for s in runs if s["argv"][:2] == ["git", "commit"])
     assert commit["argv"][2:4] == ["-m", f"Plans: {BASE} done"]
     assert commit["argv"][4] == "--" and set(commit["argv"][5:]) == {
@@ -512,14 +514,19 @@ def test_facts_name_the_fetch_age_and_every_checkout(tmp_path):
     common = pathlib.Path(main) / ".git"
     (common / "FETCH_HEAD").unlink(missing_ok=True)
     wt = tmp_path / "wt"
-    git(main, "worktree", "add", "-q", "-b", "side", str(wt), "main")
+    git(main, "worktree", "add", "-q", str(wt), "thing")       # the plan's branch
     repos.write(wt, "src.txt", "edited\n")
+    side = tmp_path / "side"
+    git(main, "worktree", "add", "-q", "-b", "side", str(side), "main")
+    repos.write(side, "src.txt", "edited\n")
     repos.write(main, f"plans/active/{THING}.md.tasks.json", "{}\n")
     _, res = repos.check(FLOW, main, "finish", THING)
     facts = res["facts"]
     assert any("origin/main never fetched" in f for f in facts), facts
     row = next(f for f in facts if f.startswith(f"checkout {wt.resolve()} "))
-    assert "on side" in row and "src.txt" in row and "outside plans/" in row
+    assert "on thing" in row and "src.txt" in row and "outside plans/" in row
+    row = next(f for f in facts if f.startswith(f"checkout {side.resolve()} "))
+    assert "on side" in row and "not looked at" in row and "src.txt" not in row
     row = next(f for f in facts if f.startswith(f"checkout {main.resolve()} "))
     assert f"plans/active/{THING}.md.tasks.json" in row
     assert any(f.startswith("on origin/main: ") and f"plans/active/{THING}.md" in f
@@ -924,16 +931,80 @@ def test_a_branch_that_exists_nowhere_is_no_proof(tmp_path):
     assert rc == 5 and "exists nowhere" in res["blocked"]["why"], res
 
 
-def test_an_upstream_gone_after_a_merge_passes(tmp_path):
+def test_an_upstream_gone_is_no_proof_a_closed_pr_deletes_it_too(tmp_path):
     main = _bare_active_thing(tmp_path)
     wt = _work_on(main)
     git(wt, "push", "-q", "-u", "origin", "thing")
     git(wt, "push", "-q", "origin", "--delete", "thing")
     git(main, "fetch", "-q", "--prune")
-    _, res = repos.check(FLOW, main, "finish", THING)
-    assert any(f.startswith("merged: thing's upstream is gone") for f in res["facts"]), res
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "isn't proven merged" in res["blocked"]["rule"], res
+    assert "its upstream is gone — merged or closed? check the PR with gh" in \
+        res["blocked"]["why"]
+    seen, _, res = repos.converge(FLOW, main, "finish", THING, "--prs-merged")
+    assert seen == ["plan", "done"], res
+
+
+def test_named_branches_replace_the_default(tmp_path):
+    main = _merged(_bare_active_thing(tmp_path), "custom")
+    _, res = repos.check(FLOW, main, "finish", THING, "--branch", "custom")
+    assert res["outcome"] == "plan", res
+    assert "merged: custom is in origin/main" in res["facts"]
+    assert not any("thing" in f and f.startswith("merged:") for f in res["facts"])
+
+
+def test_a_plan_main_already_ended_needs_no_proof(tmp_path):
+    main = repos.make(tmp_path, files=(f"done/{THING}",), text=repos.readme(active=(THING,)))
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 0 and res["outcome"] == "plan", res
+    assert any("main already has it in done/" in f for f in res["facts"]), res["facts"]
+
+
+@pytest.mark.parametrize("text", ["null", "5", '{"tasks": null}', '{"tasks": 3}', '"x"'])
+def test_an_unreadable_tracker_is_a_fact_not_a_crash(tmp_path, text):
+    main = _active_thing(tmp_path)
+    repos.write(main, f"plans/active/{THING}.md.tasks.json", text)
+    repos.commit_all(main, "odd tracker")
+    git(main, "push", "-q")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 0, res
+    assert f"the tracker plans/active/{THING}.md.tasks.json is unreadable" in res["facts"]
+
+
+def test_an_untracked_file_main_adds_makes_the_main_checkout_busy(tmp_path):
+    main = _active_thing(tmp_path)
+    repos.write(main, "notes/new.txt", "mine, not committed\n")
+    other = repos.clone(tmp_path, "other")
+    repos.write(other, "notes/new.txt", "added on main\n")
+    repos.commit_all(other, "a new file")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
     seen, _, res = repos.converge(FLOW, main, "finish", THING)
     assert seen == ["plan", "done"], res
+    assert (main / "notes/new.txt").read_text(encoding="utf-8") == "mine, not committed\n"
+
+
+def test_commit_and_merge_steps_get_time_for_hooks(tmp_path):
+    main = _active_thing(tmp_path)
+    other = repos.clone(tmp_path, "other")
+    repos.write(other, "src2.txt", "theirs\n")
+    repos.commit_all(other, "pushed elsewhere")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    for s in res["steps"]:
+        if s.get("argv", [])[1:2] in (["commit"], ["merge"]):
+            assert s["limit"] == 120 and "hook" in s["expect"], s
+        elif s.get("argv", [])[1:2] in (["mv"], ["rm"], ["add"]):
+            assert s["limit"] == 10, s
+
+
+def test_the_recheck_keeps_the_timings_as_given(tmp_path):
+    main = _active_thing(tmp_path)
+    _, res = repos.check(FLOW, main, "finish", THING, "--timeout", "1000000", "--warn", "0.25")
+    argv = res["steps"][-1]["argv"]
+    assert argv[argv.index("--warn") + 1] == "0.25"
+    assert argv[argv.index("--timeout") + 1] == "1000000", argv
 
 
 def test_prs_merged_and_confirm_pass_and_say_so(tmp_path):
@@ -950,7 +1021,8 @@ def test_prs_merged_and_confirm_pass_and_say_so(tmp_path):
 def test_every_named_branch_must_be_merged(tmp_path):
     main = _active_thing(tmp_path)
     _work_on(main, "thing-part-2")
-    rc, res = repos.check(FLOW, main, "finish", THING, "--branch", "thing-part-2")
+    rc, res = repos.check(FLOW, main, "finish", THING, "--branch", "thing",
+                          "--branch", "thing-part-2")
     assert rc == 5 and "thing-part-2" in res["blocked"]["why"], res
     assert "merged: thing is in origin/main" in res["facts"]
 

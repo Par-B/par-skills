@@ -423,9 +423,9 @@ def test_missed_start_against_master_without_origin_head(tmp_path):
 def test_missed_finish_flagged_once_the_branch_is_gone(tmp_path):
     wt = _finished_branch(tmp_path)
     assert not any("/status-board:" in ln for ln in _git_run(wt))    # not merged yet
-    repos.git(wt, "push", "-q", "origin", "--delete", "thing")   # merged, branch deleted
-    row = (f"| {repos.THING} | done here and merged, still active on main"
-           f" — run /status-board:finish |")
+    repos.git(wt, "push", "-q", "origin", "--delete", "thing")   # merged (or closed)
+    row = (f"| {repos.THING} | done here, still active on main; this branch's upstream is"
+           f" gone — if its PR was merged, run /status-board:finish |")
     assert row in _section(_git_run(wt), "⚠️ Drift")
 
 
@@ -433,8 +433,8 @@ def test_missed_finish_flagged_once_the_branch_is_gone(tmp_path):
 def test_missed_finish_flagged_for_wont_do(tmp_path):
     wt = _finished_branch(tmp_path, to="wont-do")
     repos.git(wt, "push", "-q", "origin", "--delete", "thing")
-    row = (f"| {repos.THING} | wont-do here and merged, still active on main"
-           f" — run /status-board:finish |")
+    row = (f"| {repos.THING} | wont-do here, still active on main; this branch's upstream is"
+           f" gone — if its PR was merged, run /status-board:finish |")
     assert row in _section(_git_run(wt), "⚠️ Drift")
 
 
@@ -448,9 +448,31 @@ def test_a_merged_branch_with_the_plan_still_active_asks_for_finish(tmp_path):
     repos.commit_all(wt, "the work, no plan move")
     assert not any("/status-board:" in ln for ln in _git_run(wt))    # not merged yet
     repos.git(wt, "push", "-q", "origin", "--delete", "thing")
-    row = (f"| {repos.THING} | active here and on main, and this branch looks merged"
-           f" — run /status-board:finish |")
+    row = (f"| {repos.THING} | active here and on main; this branch's upstream is gone"
+           f" — if its PR was merged, run /status-board:finish |")
     assert _section(_git_run(wt), "⚠️ Drift") == [row]
+
+
+@NEEDS_GIT_2_44
+def test_a_gone_upstream_flags_only_the_branchs_own_plan(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{repos.THING}", f"active/{repos.OTHER}"),
+                      text=repos.readme(active=(repos.THING, repos.OTHER)))
+    wt = _branch(main, tmp_path)
+    repos.git(wt, "push", "-q", "-u", "origin", "thing")
+    repos.git(wt, "push", "-q", "origin", "--delete", "thing")
+    rows = _section(_git_run(wt), "⚠️ Drift")
+    assert len(rows) == 1 and rows[0].startswith(f"| {repos.THING} |"), rows
+
+
+@NEEDS_GIT_2_44
+def test_a_relative_root_is_not_applied_twice(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _branch(main, tmp_path)
+    _start_on_branch(wt)
+    p = subprocess.run([sys.executable, SCRIPT, "--root", "wt"], cwd=tmp_path,
+                       capture_output=True, text=True, encoding="utf-8", env=repos.ENV)
+    assert p.returncode == 0, p.stderr
+    assert _section(p.stdout.splitlines(), "⚠️ Drift") == [START_ROW]
 
 
 def test_fresh_branch_is_not_taken_as_merged(tmp_path):
