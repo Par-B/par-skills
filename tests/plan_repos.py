@@ -6,6 +6,7 @@ branch) and the calling repo can't leak in."""
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -121,24 +122,44 @@ def origin_files(cwd):
                    "plans/").splitlines())
 
 
+def tmpdir_for(cwd):
+    """A TMPDIR beside the test's repos (cwd's parent), so a temporary
+    worktree a script plans lands in the test's own folder, never the
+    system's."""
+    path = pathlib.Path(cwd).resolve().parent / ".tmp"
+    path.mkdir(exist_ok=True)
+    return str(path)
+
+
 def run(script, cwd, *args):
     """(exit code, stdout + stderr) of a script run in `cwd`."""
     p = subprocess.run([sys.executable, str(script), *args], cwd=str(cwd),
-                       capture_output=True, text=True, encoding="utf-8", env=ENV)
+                       capture_output=True, text=True, encoding="utf-8",
+                       env=dict(ENV, TMPDIR=tmpdir_for(cwd)))
     return p.returncode, p.stdout + p.stderr
 
 
 def check(script, cwd, *args):
     """(exit code, parsed --json output) of `plan_flow.py check …` run in `cwd`."""
     rc, out = run(script, cwd, "check", *args, "--json")
-    return rc, json.loads(out[out.index("{"):])
+    # stderr (heartbeats, --trace lines) is appended after the object
+    return rc, json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
 
 
-def execute(steps):
+NOTE_RE = re.compile(r"^(- `[^`]+` — ).*$")
+
+
+def reworded(line):
+    """A README note line as Claude might reword it at a step's review."""
+    return NOTE_RE.sub(r"\1reworded by Claude at the review.", line)
+
+
+def execute(steps, reword=False):
     """Carry out a check's steps the way the skill tells Claude to: each run
     step alone, in its directory, stopping at the first that fails; each edit
-    replaces exactly its old lines. Returns None, or (step, CompletedProcess)
-    for the step that failed."""
+    replaces exactly its old lines (with `reword`, the note lines it adds are
+    then reworded, as its review allows). Returns None, or (step,
+    CompletedProcess) for the step that failed."""
     for step in steps:
         if step["kind"] == "run":
             p = subprocess.run(step["argv"], cwd=step["cwd"], capture_output=True,
@@ -152,13 +173,13 @@ def execute(steps):
             lines = raw.replace("\r\n", "\n").split("\n")
             a, b = step["start"] - 1, step["end"]
             assert lines[a:b] == step["old"], (step, lines[a:b])
-            lines[a:b] = step["new"]
+            lines[a:b] = [reworded(ln) for ln in step["new"]] if reword else step["new"]
             text = "\n".join(lines)
             path.write_bytes((text.replace("\n", "\r\n") if crlf else text).encode("utf-8"))
     return None
 
 
-def converge(script, cwd, *args, rounds=4):
+def converge(script, cwd, *args, rounds=4, reword=False):
     """Check, execute, repeat until the outcome is not "plan"; returns the
     list of outcomes, the last check's exit code and its output."""
     seen = []
@@ -167,6 +188,12 @@ def converge(script, cwd, *args, rounds=4):
         seen.append(res["outcome"])
         if res["outcome"] != "plan":
             return seen, rc, res
-        failed = execute(res["steps"])
+        failed = execute(res["steps"], reword)
         assert failed is None, failed
     raise AssertionError(f"no convergence: {seen}")
+
+
+def git_version():
+    """(major, minor) of the git on PATH; the checks need 2.44+ (--no-lazy-fetch)."""
+    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
+    return tuple(int(n) for n in re.findall(r"\d+", out)[:2])

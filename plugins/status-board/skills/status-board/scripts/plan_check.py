@@ -26,11 +26,12 @@ Security properties (for auditors; plan_flow.py relies on these):
     Clean filters the repo itself configures can still run under
     `git status`, as with any `git status`.
   * No network, no code execution: files and git objects are read as text.
-  * Standard library only (difflib, hashlib, os, shlex, tempfile, time), plus
+  * Standard library only (difflib, hashlib, json, os, shlex, tempfile, time), plus
     the sibling status_board.py and plan_readme.py.
 """
 import difflib
 import hashlib
+import json
 import os
 import shlex
 import tempfile
@@ -91,6 +92,12 @@ def allowed(args):
                 and not rest[1].startswith("-"))
     if cmd == "worktree":
         return rest == ["list", "--porcelain"]
+    if cmd == "merge-base":
+        return (len(rest) == 3 and rest[0] == "--is-ancestor"
+                and not any(a.startswith("-") for a in rest[1:]))
+    if cmd == "for-each-ref":
+        return (len(rest) == 2 and rest[0] == "--format=%(upstream:track)"
+                and rest[1].startswith("refs/heads/"))
     if cmd not in FLAGS or (cmd == "log" and "--no-show-signature" not in rest):
         return False
     opts = rest[:rest.index("--")] if "--" in rest else rest
@@ -187,11 +194,37 @@ def own_shape(found, plans, base):
                                for _, parents, subject, paths in found)
 
 
+NOTE = "\0note"     # a target's key for (README path, section, stems): see agrees
+
+
+def with_note(target, readme, to, stems):
+    """`target` (path -> text after the plan, None for gone), told that the
+    README's own note for the plan belongs in the `to` section."""
+    target[NOTE] = (readme, to, frozenset(stems))
+    return target
+
+
+def agrees(target, rel, got):
+    """True when `got` (text, or None: absent) is what the plan leaves at
+    `rel`. In the README the plan's own note may be worded otherwise (the
+    steps' review asks Claude to reword it), as long as it sits in the
+    target section alone and the rest of the README is as the plan makes it."""
+    want = target[rel]
+    readme, to, stems = target.get(NOTE, (None, None, None))
+    if rel != readme or got is None or want is None:
+        return got == want
+
+    def rest(text):
+        notes = set(plan_readme.find_notes(text, stems))
+        return [ln for ln in plan_readme.split_lines(text) if ln not in notes]
+    return plan_readme.sections_holding(got, stems) == [to] and rest(got) == rest(want)
+
+
 def only_own(g, top, found, plans, base, target):
     """True when every commit in `found` is one this plan redoes: own_shape,
-    and only paths the plan changes (`target`: path -> its text after the
-    plan, None for gone), each just as the plan leaves it. None for `target`
-    (the plan could not be worked out): False."""
+    and only paths the plan changes (`target`), each just as the plan leaves
+    it (see agrees). None for `target` (the plan could not be worked out):
+    False."""
     if not own_shape(found, plans, base) or target is None:
         return False
     for sha, _, _, paths in found:
@@ -199,7 +232,7 @@ def only_own(g, top, found, plans, base, target):
             return False
         for p in paths:
             got = g.run(top, "cat-file", "blob", f"{sha}:{p}")
-            if (got.stdout if got.returncode == 0 else None) != target[p]:
+            if not agrees(target, p, got.stdout if got.returncode == 0 else None):
                 return False
     return True
 
@@ -307,8 +340,8 @@ def survey(g, facts, top, plans, base):
     branch and origin/main, local main ahead/behind (and its commits when
     ahead), every checkout, origin/main's plans/ tree, the plan's files here
     and there, and the README there. Returns them as a dict."""
-    prefix = f"refs/remotes/{REMOTE}/"
-    ref = g(top, "symbolic-ref", "--quiet", prefix + "HEAD") or ""
+    prefix = sb.REMOTE_PREFIX
+    ref = sb.pick_main_ref(lambda *args: g(top, *args)) or ""
     main = ref[len(prefix):] if ref.startswith(prefix) else "main"
     on = f"{REMOTE}/{main}"
     common = g(top, "rev-parse", "--git-common-dir") or ".git"
@@ -319,7 +352,7 @@ def survey(g, facts, top, plans, base):
     if not upstream:
         raise Blocked(f"no {on}", f"there is no {on} to compare with",
                       safe=[f"git fetch {REMOTE}"], options=[f"fetch {REMOTE}, then check again"])
-    s = {"main": main, "on": on, "upstream": upstream, "mine": [],
+    s = {"main": main, "on": on, "upstream": upstream, "mine": [], "plans": plans,
          "local": g(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{main}"),
          "ahead": 0, "behind": 0}
     if s["local"]:
@@ -341,7 +374,7 @@ def survey(g, facts, top, plans, base):
     facts.append(f"in this checkout: {names([f'{plans}/{st}/{f}' for st, f in here]) or 'none'}")
     facts.append(f"on {on}: {names([f'{plans}/{st}/{f}' for st, f in s['found']]) or 'none'}")
     s["readme"] = readme = f"{plans}/README.md"
-    s["text"] = blob(g, top, s, readme)
+    s["text"] = text_of(g, top, s["tree"], readme)
     if s["text"] is not None:
         kinds = [k for k in KINDS if plan_readme.has_section(s["text"], k)]
         held = plan_readme.sections_holding(s["text"], {sb.stem(f) for _, f in s["found"]})
@@ -364,11 +397,6 @@ def tree_of(g, top, rev, plans):
 def text_of(g, top, tree, rel):
     """The text of `rel` in `tree` (line endings made \\n), or None."""
     return g.run(top, "cat-file", "blob", tree[rel][1]).stdout if rel in tree else None
-
-
-def blob(g, top, s, rel):
-    """The text of `rel` on origin/main (line endings made \\n), or None."""
-    return text_of(g, top, s["tree"], rel)
 
 
 def ahead_rule(g, facts, top, s, plans, base, target):
@@ -468,6 +496,20 @@ def leftovers(g, facts, s, top, plans, base, temp, target):
         if not temp or os.path.realpath(w["path"]) != temp:
             continue
         look = f"git -C {shlex.quote(temp)}"
+        codes = ([] if w["missing"] else
+                 [ln[:2] for ln in g.run(w["path"], "status", "--porcelain", "--no-renames",
+                                         "--untracked-files=all").stdout.splitlines()])
+        if (loose and not ahead and w["head"] == s["upstream"]
+                and all("D" in c and "?" not in c for c in codes)):
+            raise Blocked(
+                f"the temporary worktree {temp} is an unfinished checkout",
+                f"it is at {s['on']} with no commits of its own, and its only changes are "
+                f"tracked files missing from it ({names(loose)}): a `git worktree add` that "
+                f"did not finish (a timeout?). It holds nothing",
+                safe=[f"look at it: {look} status"],
+                avoid=[NEVER],
+                options=[f"ask the user, then git worktree remove --force {shlex.quote(temp)} "
+                         f"(it holds nothing) and check again"])
         if loose:
             raise Blocked(
                 f"the temporary worktree {temp} has changes",
@@ -475,7 +517,7 @@ def leftovers(g, facts, s, top, plans, base, temp, target):
                 f"({names(loose)}); removing it would lose that",
                 safe=[f"look at it: {look} status"],
                 avoid=[NEVER, "don't remove it with --force"],
-                options=["keep what is worth keeping, then git worktree remove "
+                options=["the user decides: keep what is worth keeping, then git worktree remove "
                          f"{shlex.quote(temp)} and check again"])
         if ahead and not only_own(g, top, ahead, plans, base, target):
             if own_shape(ahead, plans, base) and ahead[-1][1] != [s["upstream"]]:
@@ -506,18 +548,17 @@ def leftovers(g, facts, s, top, plans, base, temp, target):
                       "the temporary worktree goes there, and the folder is not empty",
                       safe=[f"look at what is in {temp}"],
                       avoid=[NEVER, "don't delete it unless you know what it holds"],
-                      options=["move or delete it, then check again"])
+                      options=["the user decides: move or delete it, then check again"])
     return stale
 
 
-def matches(path, rel, want):
-    """True when checkout `path` holds `rel` as `want` (text, or None: absent);
-    line endings aside."""
+def on_disk(path, rel):
+    """The text of `rel` in checkout `path` (line endings made \\n), or None."""
     full = os.path.join(path, rel)
     if not os.path.isfile(full):
-        return want is None
+        return None
     with open(full, encoding="utf-8", errors="replace") as fh:
-        return want is not None and fh.read() == want
+        return fh.read()
 
 
 def workspace(g, facts, s, top, plans, base, target, verb):
@@ -540,19 +581,32 @@ def busy_main(g, facts, s, top, target, verb):
     run's (of `verb`) are told apart from the user's work."""
     mc = s["mc"]
     busy = bool(mc and (mc["missing"] or mc["merging"] or mc["guarded"] or mc["outside"]))
+    clash = []
+    if mc and not busy and s["behind"]:
+        # an ff-only merge refuses when it would touch a file with uncommitted
+        # changes: other plans' files count too
+        incoming = {p for *_, paths in commits(g, top, f"{s['local']}..{s['upstream']}")
+                    for p in paths}
+        clash = [p for p in changed(g, mc["path"], "--untracked-files=all", "--",
+                                    f"{s['plans']}/") if p in incoming]
+        busy = bool(clash)
     if busy:
         dirt = mc["guarded"] + mc["outside"]
+        expected = {p: target[p] if p in target else text_of(g, top, s["tree"], p) for p in dirt}
         if mc["missing"]:
             why = "its folder is missing (git worktree prune clears it)"
         elif mc["merging"]:
             why = "it is in the middle of a merge"
-        elif not mc["outside"] and all(matches(mc["path"], p, blob(g, top, s, p))
+        elif clash:
+            why = (f"it is behind {s['on']}, which changes files it has uncommitted changes "
+                   f"to ({names(clash)}), so it can't be brought level")
+        elif not mc["outside"] and all(on_disk(mc["path"], p) == text_of(g, top, s["tree"], p)
                                        for p in dirt):
             why = (f"its uncommitted changes ({names(dirt)}) already match {s['on']} — "
                    f"left by an earlier run, not the user's work")
         elif not mc["outside"] and all(
-                matches(mc["path"], p, target[p] if p in target else blob(g, top, s, p))
-                for p in dirt):
+                agrees({**target, p: want}, p, on_disk(mc["path"], p))
+                for p, want in expected.items()):
             why = (f"its uncommitted changes ({names(dirt)}) are exactly what this {verb} "
                    f"makes — left by an earlier run whose commit or push did not go "
                    f"through, not the user's work")
@@ -575,8 +629,11 @@ def enter_steps(s, w, top, change):
                                   f"the leftover {temp} is gone"
                                   + (f"; this drops this check's own unpushed commit "
                                      f"{', '.join(own)}, which this plan redoes" if own else "")))
+        # a full checkout (hooks, LFS): a timeout leaves it half made
         steps.append(run_step(top, ["git", "worktree", "add", "--detach", temp, on],
-                              f"a detached checkout of {on} ({s['upstream'][:7]}) at {temp}"))
+                              f"a detached checkout of {on} ({s['upstream'][:7]}) at {temp}; "
+                              f"if it times out it leaves a partial checkout there — check "
+                              f"again and it says how to clear it", PUSH))
     if w["mc"] and not w["busy"] and s["behind"]:
         steps.append(run_step(w["work"], ["git", "merge", "--ff-only", "--no-autostash", on],
                               f"the {s['main']} checkout is at {on} ({s['upstream'][:7]})"))
@@ -646,17 +703,27 @@ def moves_to(tree, found, plans, to, on, fix):
             f"deleted",
             safe=[f"compare: git diff {on}:{a} {on}:{b}" for a, b in differ],
             avoid=[NEVER, "never delete a copy that differs from the kept one"],
-            options=[f"keep one (or make them the same) {fix}, then check again"])
+            options=[f"the user decides: keep one (or make them the same) {fix}, then "
+                     f"check again"])
     return plan, drops
 
 
-def move_steps(work, tree, plan, drops, touched):
+def move_steps(work, tree, plan, drops, touched, source=None):
     """Steps that move or drop the plan's files in checkout `work` (at the
-    commit `tree` lists); adds each path the commit must name to `touched`."""
+    commit `tree` lists); adds each path the commit must name to `touched`.
+    A "bring" move first takes the file from `source` ((sha, label): a
+    commit that is not this checkout's), so only its destination is named."""
     dirs = {p.rsplit("/", 1)[0] for p in tree}
     steps = []
     for how, src, dst in plan:
-        touched += [src] + ([dst] if how == "mv" else [])
+        if how == "bring":
+            touched.append(dst)
+            steps.append(run_step(work, ["git", "checkout", source[0], "--", src],
+                                  f"{src} as in {source[1]}, staged"))
+            if src == dst:
+                continue
+        else:
+            touched += [src] + ([dst] if how == "mv" else [])
         if how == "rm":
             steps.append(run_step(work, ["git", "rm", "--quiet", "--", src],
                                   f"{src} removed and staged (the same as {dst})"))
@@ -671,6 +738,60 @@ def move_steps(work, tree, plan, drops, touched):
         steps.append(run_step(work, ["git", "rm", "--quiet", "--", src],
                               f"the tracker {src} removed and staged"))
     return steps
+
+
+OPEN_DONE = ("completed", "superseded", "deleted")   # task statuses that are not open
+
+
+def task_tally(g, facts, top, s, plans, found):
+    """(open, total) tasks over the plan's *.tasks.json trackers (origin/main's
+    copy, else this checkout's), with a fact; None when it has none."""
+    total = open_ = 0
+    seen = False
+    for state, f in found:
+        rel = f"{plans}/{state}/{f}.tasks.json"
+        text = text_of(g, top, s["tree"], rel) if rel in s["tree"] else on_disk(top, rel)
+        if text is None:
+            continue
+        seen = True
+        try:
+            data = json.loads(text)
+            tasks = data.get("tasks", []) if isinstance(data, dict) else data
+            statuses = [t.get("status") for t in tasks if isinstance(t, dict)]
+        except (ValueError, AttributeError):
+            facts.append(f"the tracker {rel} can't be read as JSON")
+            continue
+        total += len(statuses)
+        open_ += sum(st not in OPEN_DONE for st in statuses)
+    if not seen:
+        return None
+    facts.append(f"{open_} of {total} tasks not completed")
+    return open_, total
+
+
+def branch_merged(g, top, s, name):
+    """(proof, None) when branch `name` is shown merged into origin/main here:
+    its local or remote tip is in it, or its upstream is gone after a merge;
+    else (None, what is missing)."""
+    on, upstream = s["on"], s["upstream"]
+    local = g(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}")
+    remote = g(top, "rev-parse", "--verify", "--quiet", f"refs/remotes/{REMOTE}/{name}")
+    tips = [(name, local), (f"{REMOTE}/{name}", remote)]
+    for label, tip in tips:
+        if tip and g.run(top, "merge-base", "--is-ancestor", tip, upstream).returncode == 0:
+            return f"{label} is in {on}", None
+    track = (g(top, "for-each-ref", "--format=%(upstream:track)", f"refs/heads/{name}")
+             if local else None)
+    if track == "[gone]":
+        return f"{name}'s upstream is gone after a merge", None
+    if not local and not remote:
+        return None, (f"{name} exists nowhere (not here, not on {REMOTE}); a squash-merged, "
+                      f"deleted branch can't be told apart from one never made")
+    rows = [f"{label} has {int(g(top, 'rev-list', '--count', f'{upstream}..{tip}') or 0)} "
+            f"commit(s) not in {on}" for label, tip in tips if tip]
+    if local:
+        rows.append(f"its upstream is {track or 'not set'}")
+    return None, f"{name}: " + ", ".join(rows)
 
 
 def readme_steps(work, readme, text, new, stems, review, touched, brought=None):

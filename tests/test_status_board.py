@@ -438,6 +438,21 @@ def test_missed_finish_flagged_for_wont_do(tmp_path):
     assert row in _section(_git_run(wt), "⚠️ Drift")
 
 
+@NEEDS_GIT_2_44
+def test_a_merged_branch_with_the_plan_still_active_asks_for_finish(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{repos.THING}",),
+                      text=repos.readme(active=(repos.THING,)))
+    wt = _branch(main, tmp_path)
+    repos.git(wt, "push", "-q", "-u", "origin", "thing")
+    repos.write(wt, "work.txt", "the plan's work\n")
+    repos.commit_all(wt, "the work, no plan move")
+    assert not any("/status-board:" in ln for ln in _git_run(wt))    # not merged yet
+    repos.git(wt, "push", "-q", "origin", "--delete", "thing")
+    row = (f"| {repos.THING} | active here and on main, and this branch looks merged"
+           f" — run /status-board:finish |")
+    assert _section(_git_run(wt), "⚠️ Drift") == [row]
+
+
 def test_fresh_branch_is_not_taken_as_merged(tmp_path):
     main = repos.make(tmp_path, files=(f"active/{repos.THING}",),
                       text=repos.readme(active=(repos.THING,)))
@@ -563,16 +578,20 @@ def test_watchdog_warns_then_stops_the_command_and_its_children(tmp_path, monkey
     monkeypatch.setenv("PATH", f"{fake_git('status')}{os.pathsep}{os.environ['PATH']}")
     log = io.StringIO()
     start = time.monotonic()
+    # kill at 3 s, not 1: on a loaded machine the fake git needs time to start
+    # its sleeper (and write the pid file) before the watchdog stops it
     with pytest.raises(board.Watchdog) as caught:
-        board.run_watched(["git", "status"], str(tmp_path), warn=0.2, kill=1, log=log)
-    assert time.monotonic() - start < 2.5
-    assert caught.value.argv == ["git", "status"] and caught.value.secs >= 1
+        board.run_watched(["git", "status"], str(tmp_path), warn=0.2, kill=3, log=log)
+    assert time.monotonic() - start < 3 + 2.5
+    assert caught.value.argv == ["git", "status"] and caught.value.secs >= 3
     assert "`git status`" in str(caught.value) and "was stopped" in str(caught.value)
     beats = log.getvalue().splitlines()
     assert len(beats) >= 3
     assert all(b.startswith(f"[status-board] still waiting on `git status` in {tmp_path} (")
                for b in beats)
-    assert _gone(int((tmp_path / "sleeper").read_text()))
+    pid = _sleeper_pid(tmp_path)
+    assert pid is not None, "the fake git never started its sleeper"
+    assert _gone(pid)
 
 
 @POSIX
@@ -608,8 +627,8 @@ def test_a_child_that_leaves_the_group_leaves_no_pipes_or_zombie(tmp_path, monke
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ResourceWarning)
         with pytest.raises(board.Watchdog) as stopped:
-            board.run_watched(["git", "status"], str(tmp_path), warn=0.5, kill=1,
-                              log=io.StringIO())
+            board.run_watched(["git", "status"], str(tmp_path), warn=0.5, kill=3,
+                              log=io.StringIO())    # 3 s: time to start the sleeper
         del stopped                         # its traceback holds the Popen
         gc.collect()
     pid = _sleeper_pid(tmp_path)
@@ -655,6 +674,20 @@ def test_title_of_takes_the_first_real_heading_else_prose():
     assert board.title_of("") == "(no description)"
 
 
+def test_pick_main_ref_falls_back_from_origin_head_to_main_then_master():
+    def runner(refs, head=None):
+        def git(*args):
+            if args[0] == "symbolic-ref":
+                return head
+            return "sha" if args[-1] in refs else None
+        return git
+    p = board.REMOTE_PREFIX
+    assert board.pick_main_ref(runner(set(), f"{p}trunk")) == f"{p}trunk"
+    assert board.pick_main_ref(runner({f"{p}main", f"{p}master"})) == f"{p}main"
+    assert board.pick_main_ref(runner({f"{p}master"})) == f"{p}master"
+    assert board.pick_main_ref(runner(set())) is None
+
+
 def test_short_cmd_keeps_the_first_pathspec_and_counts_the_rest():
     assert board.short_cmd(["git", "status", "--", "a", "b", "c"]) == "git status -- a …(+2)"
     assert board.short_cmd(["git", "status", "--", "a"]) == "git status -- a"
@@ -662,8 +695,8 @@ def test_short_cmd_keeps_the_first_pathspec_and_counts_the_rest():
 
 
 @POSIX
-def test_the_heartbeat_shortens_a_long_pathspec_list(tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", f"{_fake_git(tmp_path, 'status')}{os.pathsep}{os.environ['PATH']}")
+def test_the_heartbeat_shortens_a_long_pathspec_list(tmp_path, monkeypatch, fake_git):
+    monkeypatch.setenv("PATH", f"{fake_git('status')}{os.pathsep}{os.environ['PATH']}")
     log = io.StringIO()
     argv = ["git", "status", "--"] + [f"p{i}" for i in range(30)]
     with pytest.raises(board.Watchdog) as caught:
@@ -698,7 +731,8 @@ def test_main_check_hang_shows_a_skip_row(tmp_path, fake_git):
     main = repos.make(tmp_path)
     wt = _branch(main, tmp_path)
     _start_on_branch(wt)
-    env = dict(repos.ENV, STATUS_BOARD_WARN_SECS="0.2", STATUS_BOARD_KILL_SECS="1",
+    # a 3 s kill gives the fake git time to start its sleeper on a loaded machine
+    env = dict(repos.ENV, STATUS_BOARD_WARN_SECS="0.2", STATUS_BOARD_KILL_SECS="3",
                PATH=f"{fake_git('ls-tree')}{os.pathsep}{repos.ENV['PATH']}")
     p = subprocess.run([sys.executable, SCRIPT, "--root", str(wt)], capture_output=True,
                        text=True, encoding="utf-8", env=env)
@@ -708,4 +742,6 @@ def test_main_check_hang_shows_a_skip_row(tmp_path, fake_git):
     assert rows[0].startswith("| main check | main check skipped: `git --no-lazy-fetch -C ")
     assert rows[0].endswith(" was stopped |") and " ls-tree " in rows[0]
     assert "[status-board] still waiting on `git --no-lazy-fetch" in p.stderr
-    assert _gone(int((tmp_path / "sleeper").read_text()))
+    pid = _sleeper_pid(tmp_path)
+    assert pid is not None, "the fake git never started its sleeper"
+    assert _gone(pid)

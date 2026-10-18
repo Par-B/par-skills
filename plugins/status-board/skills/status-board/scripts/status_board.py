@@ -464,23 +464,32 @@ def merged(root, head):
                                   f"refs/heads/{head}") == "[gone]"
 
 
-def main_ref(root):
+def pick_main_ref(git):
     """The remote's main branch ref: origin/HEAD, else origin/main, else
-    origin/master (the first that exists), or None."""
-    ref = git_out(root, "symbolic-ref", "--quiet", REMOTE_PREFIX + "HEAD")
+    origin/master (the first that exists), or None. `git(*args)` runs a
+    read-only git command and gives its stdout, or None when it fails — so
+    the board and plan_check.py (each with its own runner) agree."""
+    ref = git("symbolic-ref", "--quiet", REMOTE_PREFIX + "HEAD")
     if ref:
         return ref
     for name in ("main", "master"):
-        if git_out(root, "rev-parse", "--verify", "--quiet", REMOTE_PREFIX + name) is not None:
+        if git("rev-parse", "--verify", "--quiet", REMOTE_PREFIX + name) is not None:
             return REMOTE_PREFIX + name
     return None
+
+
+def main_ref(root):
+    """pick_main_ref, run in `root`."""
+    return pick_main_ref(lambda *args: git_out(root, *args))
 
 
 def main_drift(root, plans):
     """[(stem, message)] for a start or finish missed on the main branch, when
     the board is rendered on another branch or in a worktree: this checkout's
     plans/ against the remote's main as last fetched (read-only; no fetch).
-    [] with no git or remote, or on the main branch itself. A squash-merged
+    [] with no git or remote, or on the main branch itself. On a branch that
+    looks merged, a plan active here and on main gets a "run finish" row too:
+    a plan is marked done on main after the merge. A squash-merged
     branch is seen as merged only once its upstream is gone locally (`git fetch
     --prune`); a stale origin/main can give a needless "run finish" row (finish
     is idempotent). A git stopped by the watchdog gives one row saying the
@@ -513,9 +522,15 @@ def _main_drift(root, plans):
                 for state in ("done", "wont-do")
                 for f in plan_files(os.path.join(plans, state))
                 if on_main.get(stem(f)) in ("active", "backlog")]
-    if finished and merged(root, head):
+    # a plan is marked done on main after the merge, so a merged branch
+    # usually still has it active, as main does
+    still = [stem(f) for f in plan_files(os.path.join(plans, "active"))
+             if on_main.get(stem(f)) == "active"]
+    if (finished or still) and merged(root, head):
         rows += [(s, f"{state} here and merged, still {there} on {main}"
                      f" — run /status-board:finish") for s, state, there in finished]
+        rows += [(s, f"active here and on {main}, and this branch looks merged"
+                     f" — run /status-board:finish") for s in still]
     return rows
 
 

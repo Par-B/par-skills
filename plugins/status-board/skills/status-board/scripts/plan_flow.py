@@ -6,26 +6,38 @@ check start <plan>: in phases, one per check (the recheck finds the next):
     A — main: the plan's files in active/ on the remote's main and its note
         in the active section, off the "next … order" list; one commit
         "Plans: start <base>", pushed. A plan not on main yet is brought over
-        from this checkout's last commit (or its branch's).
+        from a commit: its branch, origin/<branch> or this checkout's last
+        commit, whichever holds it; when they hold different copies, the
+        newest (the commit that contains the others) wins.
     B — the branch (default: the plan's slug without date and suffix): made
-        from origin/main when missing; when it lacks main's start commit or
-        is behind its remote, a Question (--sync merge|remote|both|none).
-    C — the branch's own copy: after the merge, a copy of the plan the
-        branch still keeps outside active/ moves there; committed, not pushed.
+        from origin/main when missing; when it lacks origin/main's latest
+        change to the plan or is behind its remote, a Question
+        (--sync merge|remote|both|none).
+    C — the branch's own copy: after the merge, a copy the branch still
+        keeps outside active/ is removed there (the plan is in active/);
+        committed, not pushed. Skipped when the answer was --sync none.
 check finish <plan>: after the plan's branch is merged, the plan's files
     belong in done/ (or wont-do/) on the remote's main, its *.tasks.json
     trackers gone and its note in that section of plans/README.md, off the
-    "next … order" list; one commit, pushed.
+    "next … order" list; one commit, pushed. A gate first: the move is
+    planned only when every branch of the plan (the slug's, and each
+    --branch) is shown merged here — its tip is in origin/main, or its
+    upstream is gone after a merge — or with --prs-merged (Claude saw every
+    PR merged with gh: a squash merge leaves no trace here) or --confirm
+    (the user said the plan is finished). --wont-do needs --confirm. The
+    trackers' open tasks are counted in the facts.
 The work on main happens in the main checkout when it is on main with no
 uncommitted changes outside plans/ and none (untracked included) to the
-README or the plan's files and trackers, else in a temporary worktree of
-origin/main. The checks compare with origin/main as last fetched.
+README or the plan's files and trackers (nor, when it is behind, to files
+origin/main changes), else in a temporary worktree of origin/main. The
+checks compare with origin/main as last fetched.
 
 A plan is named by its filename, slug or path; its pair (<base>-design.md and
 <base>-plan.md, or <base>.md) moves together, with their trackers.
 
 Usage:  plan_flow.py check start <plan> [--branch NAME] [--sync merge|remote|both|none]
-        plan_flow.py check finish <plan> [--wont-do]
+        plan_flow.py check finish <plan> [--branch NAME]... [--prs-merged] [--confirm]
+                                         [--wont-do]
         both with [--root DIR] [--json] [--warn S] [--timeout S] [--trace]
 Output: the outcome on the first line (PLAN (n steps), NOTHING TO DO,
 BLOCKED: <rule>, QUESTION), then Facts, then the Steps, the Question or what
@@ -47,19 +59,20 @@ import sys
 import plan_readme
 import status_board as sb
 from plan_check import (NEVER, NOT_FOUND, REMOTE, SLOW, TERMINAL, Blocked, Git,
-                        ahead_rule, blob, busy_main, changed, enter_steps, fallback_note,
-                        find_pair, leave_steps, move_steps, moves_to, names,
-                        plan_base, publish_steps, readme_steps, render, run_step,
-                        survey, temp_path, text_of, tree_of, workspace)
+                        ahead_rule, branch_merged, busy_main, changed, enter_steps,
+                        fallback_note, find_pair, leave_steps, move_steps, moves_to,
+                        names, plan_base, publish_steps, readme_steps, render, run_step,
+                        survey, task_tally, temp_path, text_of, tree_of, with_note,
+                        workspace)
 
 
-def finish(g, facts, top, plans, base, wont_do):
+def finish(g, facts, top, plans, base, args):
     """(outcome, steps, question) for finishing plan `base` on main."""
     s = survey(g, facts, top, plans, base)
     # the ahead rule goes first, but tells this check's own commits apart only
     # by what the plan makes; a rule failing on the way waits until after it
     try:
-        goal, later = finish_goal(g, facts, top, plans, base, wont_do, s), None
+        goal, later = finish_goal(g, facts, top, plans, base, args.wont_do, s), None
     except Blocked as e:
         goal, later = None, e
     ahead_rule(g, facts, top, s, plans, base, goal and goal["target"])
@@ -68,9 +81,12 @@ def finish(g, facts, top, plans, base, wont_do):
     to, plan, drops, new = goal["to"], goal["plan"], goal["drops"], goal["new"]
     on, found, text, readme = s["on"], s["found"], s["text"], s["readme"]
     stems = {sb.stem(f) for _, f in found}
+    tally = task_tally(g, facts, top, s, plans, found)
+    change = bool(plan or drops or new != text)
+    if change:
+        finish_gate(g, facts, top, s, base, args, to, tally)
     w = workspace(g, facts, s, top, plans, base, goal["target"], "finish")
 
-    change = bool(plan or drops or new != text)
     steps = enter_steps(s, w, top, change)
     if change:
         touched = []
@@ -86,6 +102,49 @@ def finish(g, facts, top, plans, base, wont_do):
         facts.append(f"{base} is in {to}/ on {on} with its note and no tracker")
         return "done", [], None
     return "plan", steps, None
+
+
+def finish_gate(g, facts, top, s, base, args, to, tally):
+    """Blocked unless the plan may be marked done (or dropped): the user said
+    so (--confirm), Claude saw every PR merged (--prs-merged), or every branch
+    of the plan is shown merged here. Dropping always needs --confirm. The
+    facts say which proof was used."""
+    never = [NEVER, "don't pass --confirm or --prs-merged on your own judgment"]
+    if to == "wont-do" and not args.confirm:
+        raise Blocked("dropping a plan needs the user's explicit word",
+                      f"--wont-do moves {base} to wont-do/; only the user decides that a "
+                      f"plan is dropped", avoid=never,
+                      options=["ask the user; if they say to drop it, check again with "
+                               "--wont-do --confirm"])
+    if args.confirm:
+        facts.append("--confirm: the user said the plan is finished")
+        return
+    if args.prs_merged:
+        facts.append("--prs-merged: Claude confirmed the PRs are merged")
+        return
+    names_ = list(dict.fromkeys([sb.DATE_RE.sub("", base)] + (args.branch or [])))
+    missing = []
+    for name in names_:
+        proof, lack = branch_merged(g, top, s, name)
+        if proof:
+            facts.append(f"merged: {proof}")
+        else:
+            missing.append(lack)
+    if missing:
+        open_tasks = (f"; {tally[0]} of {tally[1]} tasks not completed"
+                      if tally and tally[0] else "")
+        raise Blocked(
+            f"{base} isn't proven merged",
+            "; ".join(missing) + open_tasks + "; a plan is marked done only when every PR "
+            "for it is merged, or the user says it is finished",
+            safe=[f"see the PRs: gh pr list --head {n} --state all" for n in names_],
+            avoid=never,
+            options=["merge (or close) the plan's PRs first, then fetch and check again",
+                     "if the PRs are merged (a squash or rebase merge leaves no trace "
+                     "here), confirm that with gh, then check again with --prs-merged",
+                     "only if the user explicitly says the plan is finished: check again "
+                     "with --confirm",
+                     "if the plan had other branches, name each with --branch NAME"])
 
 
 def finish_goal(g, facts, top, plans, base, wont_do, s):
@@ -108,13 +167,14 @@ def finish_goal(g, facts, top, plans, base, wont_do, s):
     require_section(s, to)
     plan, drops = moves_to(s["tree"], found, plans, to, on,
                            f"on a branch or on {main}, push, fetch")
-    first = blob(g, top, s, f"{plans}/{found[0][0]}/{found[0][1]}")
-    new = noted(text, {sb.stem(f) for _, f in found}, to, fallback_note(found, base, first),
-                readme, on)
+    tree, stems = s["tree"], {sb.stem(f) for _, f in found}
+    first = text_of(g, top, tree, f"{plans}/{found[0][0]}/{found[0][1]}")
+    new = noted(text, stems, to, fallback_note(found, base, first), readme, on)
     target = {src: None for _, src, _ in plan} | {p: None for p in drops}
-    target |= {dst: blob(g, top, s, src) for how, src, dst in plan if how == "mv"}
+    target |= {dst: text_of(g, top, tree, src) for how, src, dst in plan if how == "mv"}
     target[readme] = new
-    return {"to": to, "plan": plan, "drops": drops, "new": new, "target": target}
+    return {"to": to, "plan": plan, "drops": drops, "new": new,
+            "target": with_note(target, readme, to, stems)}
 
 
 def require_section(s, kind):
@@ -230,7 +290,8 @@ def start_goal(g, facts, top, plans, base, s, b):
     target |= {dst: text_of(g, top, tree, src_) for how, src_, dst in plan if how != "rm"}
     target[readme] = new
     return {"plan": plan, "src": src, "brought": brought, "stems": stems, "new": new,
-            "target": target, "change": bool(plan or new != s["text"])}
+            "target": with_note(target, readme, "active", stems),
+            "change": bool(plan or new != s["text"])}
 
 
 def bring_source(g, facts, top, plans, base, s, b):
@@ -320,22 +381,8 @@ def main_steps(g, facts, top, plans, base, s, goal):
     w = workspace(g, facts, s, top, plans, base, goal["target"], "start")
     work, touched = w["work"], []
     steps = enter_steps(s, w, top, True)
-    if goal["src"]:
-        dirs = {p.rsplit("/", 1)[0] for p in s["tree"]}
-        sha = goal["src"]["sha"]
-        for _, src, dst in goal["plan"]:
-            steps.append(run_step(work, ["git", "checkout", sha, "--", src],
-                                  f"{src} as in {goal['brought']}, staged"))
-            if src != dst:
-                if dst.rsplit("/", 1)[0] not in dirs:
-                    steps.append(run_step(work, ["mkdir", "-p", dst.rsplit("/", 1)[0]],
-                                          "the folder exists"))
-                    dirs.add(dst.rsplit("/", 1)[0])
-                steps.append(run_step(work, ["git", "mv", src, dst],
-                                      f"{dst} staged; {src} gone"))
-            touched.append(dst)
-    else:
-        steps += move_steps(work, s["tree"], goal["plan"], [], touched)
+    source = (goal["src"]["sha"], goal["brought"]) if goal["src"] else None
+    steps += move_steps(work, s["tree"], goal["plan"], [], touched, source)
     review = (f"re-read the active section and the next list: the note for {base} should "
               f"describe it as in flight (no longer not started), and no item for it "
               f"should be left in the next list")
@@ -377,8 +424,9 @@ def branch_phase(g, facts, top, plans, base, s, b, sync):
                       avoid=[NEVER, "don't abort it without asking: that throws away its "
                                     "resolution"],
                       options=[f"the user decides: finish it (resolve, git add, git commit) "
-                               f"or abort it (git merge --abort) in {bc['path']}, then check "
-                               f"again"])
+                               f"or abort it (git merge --abort; it may not bring back "
+                               f"uncommitted changes that were in that checkout before the "
+                               f"merge) in {bc['path']}, then check again"])
     diverged, left = b["ours"] and b["theirs"], []
     if diverged and sync in ("merge", "none"):
         # the answer leaves the remote alone (a merge of main may be what split them)
@@ -491,7 +539,7 @@ def branch_workspace(top, b, base):
                       "the temporary checkout of the branch goes there, and the folder is "
                       "not empty", safe=[f"look at what is in {temp}"],
                       avoid=[NEVER, "don't delete it unless you know what it holds"],
-                      options=["move or delete it, then check again"])
+                      options=["the user decides: move or delete it, then check again"])
     return temp, temp
 
 
@@ -570,8 +618,11 @@ def recheck(args):
     if args.verb == "start":
         argv += [*(["--branch", args.branch] if args.branch else []),
                  *(["--sync", args.sync] if args.sync else [])]
-    elif args.wont_do:
-        argv.append("--wont-do")
+    else:
+        for name in args.branch or []:
+            argv += ["--branch", name]
+        argv += [f for f, on in (("--wont-do", args.wont_do), ("--confirm", args.confirm),
+                                 ("--prs-merged", args.prs_merged)) if on]
     for flag, value in (("--warn", args.warn), ("--timeout", args.timeout)):
         if value:
             argv += [flag, f"{value:g}"]
@@ -603,7 +654,14 @@ def main():
     f = verbs.add_parser("finish", parents=[common], allow_abbrev=False,
                          help="after the merge: is the plan done on main?")
     f.add_argument("--wont-do", action="store_true",
-                   help="the plan was dropped: wont-do/ instead of done/")
+                   help="the plan was dropped: wont-do/ instead of done/ (needs --confirm)")
+    f.add_argument("--branch", action="append",
+                   help="another branch of the plan, all of which must be merged "
+                        "(repeatable; the slug's branch is always included)")
+    f.add_argument("--confirm", action="store_true",
+                   help="the user explicitly said the plan is finished")
+    f.add_argument("--prs-merged", action="store_true",
+                   help="Claude looked the plan's PRs up with gh: every one is merged")
     args = ap.parse_args()
     base = plan_base(args.plan)
     g = Git(args.warn, args.timeout, args.trace)
@@ -611,6 +669,12 @@ def main():
     root = args.root or "."
     try:
         p = g.run(root, "rev-parse", "--show-toplevel")
+        said = (p.stderr or p.stdout).strip()
+        if p.returncode and "unknown option" in said and "no-lazy-fetch" in said:
+            raise Blocked("git 2.44 or newer is needed",
+                          f"this git does not know --no-lazy-fetch, which keeps the check "
+                          f"off the network; git said: {said}",
+                          safe=["git --version"], options=["update git, then check again"])
         if p.returncode:
             raise Blocked("not a git checkout",
                           f"git rev-parse --show-toplevel in {os.path.abspath(root)} said: "
@@ -627,7 +691,7 @@ def main():
         if args.verb == "start":
             outcome, steps, question = start(g, facts, top, plans, base, args.branch, args.sync)
         else:
-            outcome, steps, question = finish(g, facts, top, plans, base, args.wont_do)
+            outcome, steps, question = finish(g, facts, top, plans, base, args)
         code = 0
         if outcome == "plan":
             steps.append(recheck(args))

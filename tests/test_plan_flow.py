@@ -1,4 +1,5 @@
 import json
+import shlex
 import os
 import pathlib
 import shutil
@@ -10,12 +11,16 @@ import pytest
 import plan_repos as repos
 from plan_repos import OTHER, THING, git
 
+pytestmark = pytest.mark.skipif(repos.git_version() < (2, 44),
+                                reason="the checks need git 2.44+")
 REPO = pathlib.Path(__file__).resolve().parents[1]
 FLOW = REPO / "plugins/status-board/skills/status-board/scripts/plan_flow.py"
 BASE = "2026-01-01-thing"
 POSIX = pytest.mark.skipif(os.name != "posix", reason="the fake git is a POSIX shell script")
 
 sys.path.insert(0, str(FLOW.parent))
+sys.path.insert(0, str(REPO / "plugins/status-board/hooks"))
+import approve_read_only  # noqa: E402
 import plan_check  # noqa: E402
 
 
@@ -24,10 +29,17 @@ def _readme_on_main(cwd):
     return repos.show(cwd, "origin/main:plans/README.md")
 
 
+def _merged(main, name="thing"):
+    """The plan's branch, merged: it is in origin/main (the finish gate's proof)."""
+    git(main, "branch", name, "origin/main")
+    return main
+
+
 def _active_thing(tmp_path, **kw):
-    """A main checkout whose board has THING in active/ with its note."""
-    return repos.make(tmp_path, files=(f"active/{THING}",),
-                      text=kw.pop("text", repos.readme(active=(THING,))), **kw)
+    """A main checkout whose board has THING in active/ with its note, and
+    whose branch "thing" is merged."""
+    return _merged(repos.make(tmp_path, files=(f"active/{THING}",),
+                              text=kw.pop("text", repos.readme(active=(THING,))), **kw))
 
 
 def _tracked_tracker(tmp_path):
@@ -62,7 +74,7 @@ def _blocked(res):
 
 # --- finish, end to end ---------------------------------------------------------
 
-def test_finish_after_the_branch_did_the_move(tmp_path):
+def test_finish_when_main_already_has_it_done(tmp_path):
     main = _active_thing(tmp_path)
     other = repos.clone(tmp_path, "other")
     git(other, "mv", f"plans/active/{THING}.md", f"plans/done/{THING}.md")
@@ -78,7 +90,7 @@ def test_finish_after_the_branch_did_the_move(tmp_path):
     assert git(main, "log", "-1", "--format=%s") == "the branch, merged"
 
 
-def test_finish_puts_right_what_the_branch_missed(tmp_path):
+def test_finish_moves_an_active_plan_to_done(tmp_path):
     main = _tracked_tracker(tmp_path)
     seen, rc, res = repos.converge(FLOW, main, "finish", THING)
     assert seen == ["plan", "done"] and rc == 0, res
@@ -103,7 +115,7 @@ def test_finish_twice_commits_once(tmp_path):
 
 def test_finish_wont_do(tmp_path):
     main = _active_thing(tmp_path)
-    seen, rc, res = repos.converge(FLOW, main, "finish", THING, "--wont-do")
+    seen, rc, res = repos.converge(FLOW, main, "finish", THING, "--wont-do", "--confirm")
     assert seen == ["plan", "done"], res
     assert f"plans/wont-do/{THING}.md" in repos.origin_files(main)
     assert _readme_on_main(main) == repos.readme(wontdo=(THING,))
@@ -116,6 +128,7 @@ def test_finish_moves_the_pair_and_drops_trackers_in_any_state(tmp_path):
     repos.write(main, f"plans/backlog/{BASE}-plan.md.tasks.json", "{}\n")
     repos.commit_all(main, "a stray tracker")
     git(main, "push", "-q")
+    _merged(main)
     seen, _, res = repos.converge(FLOW, main, "finish", f"{BASE}-plan.md")
     assert seen == ["plan", "done"], res
     files = repos.origin_files(main)
@@ -706,10 +719,228 @@ def test_wont_do_is_ignored_for_a_plan_already_done(tmp_path):
 
 def test_finish_a_plan_with_a_non_ascii_name(tmp_path):
     stem = "2026-01-01-thé-design"
-    main = repos.make(tmp_path, files=(f"active/{stem}",), text=repos.readme(active=(stem,)))
+    main = _merged(repos.make(tmp_path, files=(f"active/{stem}",),
+                              text=repos.readme(active=(stem,))), "thé")
     seen, _, res = repos.converge(FLOW, main, "finish", stem)
     assert seen == ["plan", "done"], res
     git(main, "fetch", "-q")
     files = git(main, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only",
                 "origin/main", "--", "plans/").splitlines()
     assert f"plans/done/{stem}.md" in files
+
+
+# --- a note reworded at the review, a slow worktree add, a busy main ---------------
+
+def test_a_reworded_note_finishes_end_to_end(tmp_path):
+    main = _active_thing(tmp_path)
+    seen, _, res = repos.converge(FLOW, main, "finish", THING, reword=True)
+    assert seen == ["plan", "done"], res
+    done = repos.section(_readme_on_main(main), "done").strip()
+    assert done == f"- `{THING}` — reworded by Claude at the review."
+
+
+def test_a_rejected_push_with_a_reworded_note_is_still_this_checks_own(tmp_path):
+    main = _active_thing(tmp_path)
+    _hook(tmp_path / "origin.git", "pre-receive", "exit 1")
+    step, _ = repos.execute(repos.check(FLOW, main, "finish", THING)[1]["steps"], reword=True)
+    assert step["argv"][:2] == ["git", "push"]
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "this check's own unpushed commit" in res["blocked"]["rule"], res
+
+
+def test_a_failed_commit_with_a_reworded_note_is_still_this_checks_work(tmp_path):
+    main = _active_thing(tmp_path)
+    _hook(main / ".git", "pre-commit", f'[ "$(pwd -P)" = "{main.resolve()}" ] && exit 1; exit 0')
+    step, _ = repos.execute(repos.check(FLOW, main, "finish", THING)[1]["steps"], reword=True)
+    assert step["argv"][:2] == ["git", "commit"]
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 0 and "exactly what this finish makes" in "\n".join(res["facts"]), res
+
+
+def test_a_leftover_temp_commit_with_a_reworded_note_is_redone(tmp_path):
+    main = _active_thing(tmp_path)
+    repos.write(main, "src.txt", "edited\n")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    temp = res["steps"][0]["argv"][4]
+    upto = next(i for i, s in enumerate(res["steps"]) if s.get("argv", [])[:2] == ["git", "push"])
+    assert repos.execute(res["steps"][:upto], reword=True) is None
+    _, res = repos.check(FLOW, main, "finish", THING)
+    assert res["steps"][0]["argv"] == ["git", "worktree", "remove", temp], res
+    assert "drops this check's own unpushed commit" in res["steps"][0]["expect"]
+
+
+def test_a_note_moved_somewhere_else_is_not_this_checks_own(tmp_path):
+    main = _active_thing(tmp_path)
+    _hook(tmp_path / "origin.git", "pre-receive", "exit 1")
+    repos.execute(repos.check(FLOW, main, "finish", THING)[1]["steps"])
+    note = f"- `{THING}` — note of {THING}."
+    text = repos.readme(done=(THING,)).replace(f"{note}\n", "*(none)*\n").replace(
+        "## 🚫 wont-do — decided against\n\n*(none)*", f"## 🚫 wont-do — decided against\n\n{note}")
+    repos.write(main, "plans/README.md", text)
+    git(main, "commit", "-q", "--amend", "--no-edit", "--", "plans/README.md")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "own" not in res["blocked"]["rule"], res
+
+
+def test_the_temp_worktree_add_gets_time_and_says_what_a_timeout_leaves(tmp_path):
+    main = _active_thing(tmp_path)
+    git(main, "switch", "-q", "-c", "other-work")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    add = next(s for s in res["steps"] if s.get("argv", [])[1:3] == ["worktree", "add"])
+    assert add["limit"] == 120 and "partial" in add["expect"], add
+
+
+def test_an_unfinished_temp_worktree_add_can_go_with_force(tmp_path):
+    main = _active_thing(tmp_path)
+    git(main, "switch", "-q", "-c", "other-work")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    temp = next(s for s in res["steps"] if s.get("argv", [])[1:3] == ["worktree", "add"])["argv"][4]
+    git(main, "worktree", "add", "-q", "--no-checkout", "--detach", temp, "origin/main")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "unfinished" in res["blocked"]["rule"], res
+    assert f"ask the user, then git worktree remove --force {temp}" in " ".join(
+        res["blocked"]["options"])
+    git(main, "worktree", "remove", "--force", temp)
+    assert repos.converge(FLOW, main, "finish", THING)[0][-1] == "done"
+
+
+def test_a_main_checkout_whose_dirty_plan_files_main_changes_is_busy(tmp_path):
+    main = _merged(repos.make(tmp_path, files=(f"active/{THING}", f"backlog/{OTHER}"),
+                              text=repos.readme(active=(THING,), backlog=(OTHER,))))
+    repos.write(main, f"plans/backlog/{OTHER}.md", "# Other, being edited here\n")
+    other = repos.clone(tmp_path, "other")
+    repos.write(other, f"plans/backlog/{OTHER}.md", "# Other, changed on main\n")
+    repos.commit_all(other, "other plan changed")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    seen, _, res = repos.converge(FLOW, main, "finish", THING)
+    assert seen == ["plan", "done"], res
+    assert (main / f"plans/backlog/{OTHER}.md").read_text(encoding="utf-8") == \
+        "# Other, being edited here\n"
+    assert f"plans/backlog/{OTHER}.md" in "\n".join(res["facts"])
+
+
+def test_the_printed_recheck_is_approved_by_the_hook(tmp_path):
+    main = _active_thing(tmp_path)
+    _, res = repos.check(FLOW, main, "finish", THING, "--timeout", "90", "--trace")
+    last = res["steps"][-1]
+    assert last["kind"] == "recheck" and "--timeout" in last["argv"] and "--trace" in last["argv"]
+
+    assert approve_read_only.decide(shlex.join(last["argv"])), last["argv"]
+
+
+@POSIX
+def test_an_old_git_is_named_as_the_reason(tmp_path):
+    main = _active_thing(tmp_path)
+    fake = tmp_path / "oldgit"
+    fake.mkdir()
+    (fake / "git").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do [ "$a" = --no-lazy-fetch ] && '
+        '{ echo "unknown option: --no-lazy-fetch" >&2; exit 129; }; done\n'
+        f"exec '{shutil.which('git')}' \"$@\"\n", encoding="utf-8")
+    (fake / "git").chmod(0o755)
+    env = dict(repos.ENV, PATH=f"{fake}{os.pathsep}{repos.ENV['PATH']}")
+    p = subprocess.run([sys.executable, str(FLOW), "check", "finish", THING, "--json"],
+                       cwd=main, capture_output=True, text=True, encoding="utf-8", env=env)
+    assert p.returncode == 5, p.stdout + p.stderr
+    assert json.loads(p.stdout)["blocked"]["rule"] == "git 2.44 or newer is needed"
+
+
+# --- the finish gate: merged, or the user's word ------------------------------------
+
+def _work_on(main, name="thing"):
+    """Branch `name` with a commit origin/main lacks."""
+    wt = main.parent / f"wt-{name}"
+    git(main, "worktree", "add", "-q", "-b", name, str(wt), "origin/main")
+    repos.write(wt, "work.txt", "unmerged work\n")
+    repos.commit_all(wt, "work")
+    return wt
+
+
+def _bare_active_thing(tmp_path):
+    """THING in active/ on main, and no branch for it anywhere."""
+    return repos.make(tmp_path, files=(f"active/{THING}",), text=repos.readme(active=(THING,)))
+
+
+def test_an_unmerged_branch_blocks_the_finish(tmp_path):
+    main = _bare_active_thing(tmp_path)
+    _work_on(main)
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and res["blocked"]["rule"] == f"{BASE} isn't proven merged", res
+    assert "thing" in res["blocked"]["why"]
+    assert "1 commit(s) not in origin/main" in res["blocked"]["why"]
+    options = " ".join(res["blocked"]["options"])
+    assert "--prs-merged" in options and "--confirm" in options
+
+
+def test_a_branch_that_exists_nowhere_is_no_proof(tmp_path):
+    main = _bare_active_thing(tmp_path)
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 5 and "exists nowhere" in res["blocked"]["why"], res
+
+
+def test_an_upstream_gone_after_a_merge_passes(tmp_path):
+    main = _bare_active_thing(tmp_path)
+    wt = _work_on(main)
+    git(wt, "push", "-q", "-u", "origin", "thing")
+    git(wt, "push", "-q", "origin", "--delete", "thing")
+    git(main, "fetch", "-q", "--prune")
+    _, res = repos.check(FLOW, main, "finish", THING)
+    assert any(f.startswith("merged: thing's upstream is gone") for f in res["facts"]), res
+    seen, _, res = repos.converge(FLOW, main, "finish", THING)
+    assert seen == ["plan", "done"], res
+
+
+def test_prs_merged_and_confirm_pass_and_say_so(tmp_path):
+    main = _bare_active_thing(tmp_path)
+    _, res = repos.check(FLOW, main, "finish", THING, "--prs-merged")
+    assert res["outcome"] == "plan", res
+    assert "--prs-merged: Claude confirmed the PRs are merged" in res["facts"]
+    assert "--prs-merged" in res["steps"][-1]["argv"]
+    _, res = repos.check(FLOW, main, "finish", THING, "--confirm")
+    assert res["outcome"] == "plan", res
+    assert "--confirm: the user said the plan is finished" in res["facts"]
+
+
+def test_every_named_branch_must_be_merged(tmp_path):
+    main = _active_thing(tmp_path)
+    _work_on(main, "thing-part-2")
+    rc, res = repos.check(FLOW, main, "finish", THING, "--branch", "thing-part-2")
+    assert rc == 5 and "thing-part-2" in res["blocked"]["why"], res
+    assert "merged: thing is in origin/main" in res["facts"]
+
+
+def test_dropping_a_plan_needs_the_users_word(tmp_path):
+    main = _active_thing(tmp_path)
+    rc, res = repos.check(FLOW, main, "finish", THING, "--wont-do")
+    assert rc == 5, res
+    assert res["blocked"]["rule"] == "dropping a plan needs the user's explicit word"
+    seen, _, res = repos.converge(FLOW, main, "finish", THING, "--wont-do", "--confirm")
+    assert seen == ["plan", "done"], res
+
+
+def test_the_tracker_count_is_a_fact_and_part_of_the_why(tmp_path):
+    main = _bare_active_thing(tmp_path)
+    tasks = {"tasks": [{"id": 1, "status": "completed"}, {"id": 2, "status": "pending"},
+                       {"id": 3, "status": "superseded"}, {"id": 4, "status": "in_progress"}]}
+    repos.write(main, f"plans/active/{THING}.md.tasks.json", json.dumps(tasks))
+    repos.commit_all(main, "tracker")
+    git(main, "push", "-q")
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert "2 of 4 tasks not completed" in res["facts"], res["facts"]
+    assert rc == 5 and "2 of 4 tasks not completed" in res["blocked"]["why"]
+    _merged(main)
+    rc, res = repos.check(FLOW, main, "finish", THING)
+    assert rc == 0 and res["outcome"] == "plan" and "2 of 4 tasks not completed" in res["facts"]
+
+
+def test_the_gate_flags_are_carried_and_approved(tmp_path):
+    main = _active_thing(tmp_path)
+    _, res = repos.check(FLOW, main, "finish", THING, "--branch", "thing", "--branch", "x2",
+                         "--confirm", "--wont-do", "--prs-merged")
+    argv = res["steps"][-1]["argv"]
+    assert argv[argv.index("finish") + 2:] == [
+        "--branch", "thing", "--branch", "x2", "--wont-do", "--confirm", "--prs-merged",
+        "--json"], argv
+    assert approve_read_only.decide(shlex.join(argv)), argv

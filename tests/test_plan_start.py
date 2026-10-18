@@ -11,6 +11,8 @@ import pytest
 import plan_repos as repos
 from plan_repos import OTHER, THING, git
 
+pytestmark = pytest.mark.skipif(repos.git_version() < (2, 44),
+                                reason="the checks need git 2.44+")
 REPO = pathlib.Path(__file__).resolve().parents[1]
 FLOW = REPO / "plugins/status-board/skills/status-board/scripts/plan_flow.py"
 BASE = "2026-01-01-thing"
@@ -146,7 +148,7 @@ def test_start_plan_written_on_its_branch(tmp_path):
     assert (wt / f"plans/active/{FRESH}.md").is_file()
     assert not (wt / f"plans/backlog/{FRESH}.md").exists()
     assert git(wt, "status", "--porcelain") == ""
-    assert git(wt, "log", "-1", "--format=%s") == f"Plans: start 2026-01-03-fresh"
+    assert git(wt, "log", "-1", "--format=%s") == "Plans: start 2026-01-03-fresh"
     assert "not pushed" in _facts(res)
 
 
@@ -650,3 +652,31 @@ def test_start_needs_an_active_section(tmp_path):
     main = repos.make(tmp_path, text=text)
     rc, res = repos.check(FLOW, main, "start", THING)
     assert rc == 5 and "no active section" in res["blocked"]["rule"], res
+
+
+# --- a note reworded at the review --------------------------------------------------
+
+def test_start_with_a_reworded_note_converges(tmp_path):
+    main = repos.make(tmp_path)
+    seen, _, res = repos.converge(FLOW, main, "start", THING, reword=True)
+    assert seen[-1] == "done", res
+    active = repos.section(_readme_on_main(main), "active").strip()
+    assert active == f"- `{THING}` — reworded by Claude at the review."
+
+
+def test_start_a_rejected_push_with_a_reworded_note_is_still_own(tmp_path):
+    main = repos.make(tmp_path)
+    _hook(tmp_path / "origin.git", "pre-receive", "exit 1")
+    step, _ = repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"], reword=True)
+    assert step["argv"][:2] == ["git", "push"]
+    rc, res = repos.check(FLOW, main, "start", THING)
+    assert rc == 5 and "this check's own unpushed commit" in res["blocked"]["rule"], res
+
+
+def test_start_a_failed_commit_with_a_reworded_note_is_still_this_starts(tmp_path):
+    main = repos.make(tmp_path)
+    _hook(main / ".git", "pre-commit", f'[ "$(pwd -P)" = "{main.resolve()}" ] && exit 1; exit 0')
+    step, _ = repos.execute(repos.check(FLOW, main, "start", THING)[1]["steps"], reword=True)
+    assert step["argv"][:2] == ["git", "commit"]
+    rc, res = repos.check(FLOW, main, "start", THING)
+    assert rc == 0 and "exactly what this start makes" in _facts(res), res
