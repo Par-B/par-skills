@@ -147,7 +147,11 @@ def start(g, facts, top, plans, base, name, sync):
     s = survey(g, facts, top, plans, base)
     main = s["main"]
     name = name or sb.DATE_RE.sub("", base)
-    if name.startswith("-") or g(top, "check-ref-format", "--branch", name) != name:
+    if name.startswith("-"):
+        raise Blocked(f"{name!r} is not a valid branch name",
+                      "the check refuses a name starting with \"-\" (it would read as an "
+                      "option)", options=["name the branch with --branch NAME"])
+    if g(top, "check-ref-format", "--branch", name) != name:
         raise Blocked(f"{name!r} is not a valid branch name",
                       "git check-ref-format --branch refuses it",
                       options=["name the branch with --branch NAME"])
@@ -260,7 +264,8 @@ def bring_source(g, facts, top, plans, base, s, b):
             for st, f in got:             # STATES order: the copy nearest active
                 pick.setdefault(f, st)
             pick = [(st, f) for f, st in pick.items()]
-            copy = tuple(sorted((f, st, tree[f"{plans}/{st}/{f}"][1]) for st, f in pick))
+            # the same text in another state folder is the same copy
+            copy = tuple(sorted((f, tree[f"{plans}/{st}/{f}"][1]) for st, f in pick))
             held.append({"label": label, "sha": sha, "tree": tree, "got": got,
                          "pick": pick, "copy": copy})
     if not held:
@@ -291,6 +296,10 @@ def bring_source(g, facts, top, plans, base, s, b):
                          "check out the commit with the right copy and check again from "
                          "there", "or make the copies the same, then check again"])
         src = newest[0]
+        compared = ", ".join(f"{h['label']} ({h['sha'][:7]})" for h in held)
+        facts.append(f"{base}'s copies differ between {compared}; the newest, "
+                     f"{src['label']} ({src['sha'][:7]}), contains the others and is "
+                     f"brought over")
     label, sha, tree, got, pick = (src["label"], src["sha"], src["tree"], src["got"],
                                    src["pick"])
     ended = [f"{plans}/{st}/{f}" for st, f in got if st in TERMINAL]
@@ -411,7 +420,9 @@ def branch_phase(g, facts, top, plans, base, s, b, sync):
                          f"(--sync {sync})")
     if not lacks:
         facts.append(f"{name} has {on}'s latest change to the plan ({started[:7]})")
-        steps = copy_steps(g, facts, top, plans, base, s, b, btree, sync if left else None)
+        # only "none" leaves the branch alone: after a merge, its copy still moves
+        leave = sync if left and sync == "none" else None
+        steps = copy_steps(g, facts, top, plans, base, s, b, btree, leave)
         if steps:
             return "plan", steps, None
     if bc and os.path.realpath(bc["path"]) == branch_temp(top, base):

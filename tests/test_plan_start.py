@@ -531,6 +531,23 @@ def test_bring_over_takes_the_newest_copy(tmp_path):
     _, res = repos.check(FLOW, main, "start", NEWP)
     newest = git(main, "rev-parse", "origin/newp")
     assert ["git", "checkout", newest, "--", f"plans/backlog/{NEWP}.md"] in _runs(res), res
+    chose = next(f for f in res["facts"] if "copies differ" in f)
+    assert "branch newp" in chose and "origin/newp" in chose and newest[:7] in chose, chose
+    assert "the newest" in chose
+
+
+def test_bring_over_compares_content_not_folders(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "newp", "newp")
+    repos.plan(wt, f"active/{NEWP}")
+    repos.commit_all(wt, "drafted straight into active/")
+    side = _worktree(main, tmp_path / "side", "side")
+    repos.plan(side, f"backlog/{NEWP}")
+    repos.commit_all(side, "the same text, in backlog/")
+    rc, res = repos.check(FLOW, side, "start", NEWP)
+    assert rc == 0 and res["outcome"] == "plan", res
+    branch = git(main, "rev-parse", "newp")
+    assert ["git", "checkout", branch, "--", f"plans/active/{NEWP}.md"] in _runs(res), res
 
 
 def test_bring_over_blocks_on_two_unrelated_copies(tmp_path):
@@ -574,6 +591,27 @@ def test_a_branch_name_starting_with_a_dash_is_blocked(tmp_path):
     main = repos.make(tmp_path)
     rc, out = repos.run(FLOW, main, "check", "start", THING, "--branch=-x")
     assert rc == 5 and "BLOCKED" in out.splitlines()[0], out
+    why = next(line for line in out.splitlines() if line.startswith("Why: "))
+    assert "starting with \"-\"" in why and "git" not in why, why
+
+
+def test_merging_main_into_a_branch_behind_its_remote_still_moves_its_copy(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "fresh", "fresh")
+    repos.plan(wt, f"backlog/{FRESH}")
+    repos.commit_all(wt, "write the plan")
+    git(wt, "push", "-q", "-u", "origin", "fresh")
+    other = repos.clone(tmp_path, "other")
+    git(other, "switch", "-q", "fresh")
+    repos.write(other, "theirs.txt", "theirs\n")
+    repos.commit_all(other, "pushed elsewhere")
+    git(other, "push", "-q")
+    git(main, "fetch", "-q")
+    seen, rc, res = repos.converge(FLOW, wt, "start", FRESH, "--sync", "merge", rounds=5)
+    assert seen[-1] == "done" and rc == 0, res
+    assert (wt / f"plans/active/{FRESH}.md").is_file()
+    assert not (wt / f"plans/backlog/{FRESH}.md").exists()
+    assert "you chose to leave the branch" not in _facts(res)
 
 
 def test_a_same_named_branch_without_the_plan_is_questioned(tmp_path):
