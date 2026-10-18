@@ -66,7 +66,7 @@ def split_lines(text):
 def has_section(text, kind):
     """True when the README has a section of `kind` ("next" or a state)."""
     lines = split_lines(text)
-    return kind in sb.find_sections(lines, sb.scan_lines(lines)[0])
+    return kind in sb.section_layout(lines)[0]
 
 
 def sections_holding(text, stems):

@@ -111,9 +111,14 @@ absent, everything behaves exactly as a single-file board.
   whose earliest state word is done/shipped (or won't-do/rejected), running to
   the next heading of the same or a higher level; a heading holding "next" and
   "order" is never one. A note is an unindented list item or a table row there,
-  outside fenced code and HTML comments; its plan is its first backticked slug
-  or `.md` filename (`{a,b}` brace shorthand names a pair). Mentions anywhere
-  else — the next list, another section, Conventions — don't count.
+  outside fenced code, HTML comments and any nested section of another kind;
+  an item's plan is its first backticked slug or `.md` filename, a row's its
+  first `.md` filename (`{a,b}` brace shorthand names a pair). Mentions
+  anywhere else — the next list, another section, Conventions — don't count.
+  When that section holds no notes (an ARCHIVE.md whose shallowest done
+  heading is a bare index of the folder), the notes are those of the
+  shallowest level of other headings of its kind that has some, all of that
+  level in line order.
 - Description = the one-line note from `plans/README.md`, matched by filename —
   expand `{a,b}` brace shorthand and read backticked slugs. **Also read
   `plans/ARCHIVE.md`** (same sibling dir) if present and match by filename, so a
@@ -170,16 +175,19 @@ absent, everything behaves exactly as a single-file board.
   old-style list (a non-list line starting in bold whose bold text holds "next"
   and "order", followed by an unindented list item naming a plan, as in the Next
   rules, before the next heading) → `old-style next list at line N — move under
-  "next — in order"`; then, for boards older than 0.7.1, each done or wont-do
-  section (found as in the same-date rule) where a note dated by its plan's
-  `YYYY-MM-DD-` prefix sits above a note with a later date → `done/won't-do
-  notes aren't newest first (line N) — migrate` (N = the line of the first
-  such note; undated notes are ignored, same-date notes are in order); and,
-  when a Conventions part (under the first heading holding "convention", to
-  the next heading of the same or a higher level, outside fenced code and
-  HTML comments) still says "When it ships, move it to `done/`." or never says
-  "newest first" → `conventions predate 0.7 (start/finish, notes newest first)
-  — migrate`. No Conventions heading → no row.
+  "next — in order"`; then the pre-0.7.1 rows, only when a Conventions part
+  (under the first heading holding "convention", to the next heading of the
+  same or a higher level, outside fenced code and HTML comments) still says
+  "When it ships, move it to `done/`." or never says "newest first" (no
+  Conventions heading → no rows): first, for each done or wont-do section
+  (found as in the same-date rule, without the fallback) where a note (item or
+  table row) dated by its plan's `YYYY-MM-DD-` prefix sits above a note with a
+  later date in the same run of notes between headings → `done/won't-do notes
+  aren't newest first (line N) — migrate` (N = the line of the first such
+  note; undated notes are ignored, same-date notes are in order); then
+  `conventions predate 0.7.1 — migrate`. A 0.7.1 board is never flagged for
+  its notes: finish puts each on top in the order plans finish, which their
+  dates need not follow.
 - `archive` scope: the script **relays `plans/ARCHIVE.md` verbatim** (its own
   Markdown, rolled-off entries + done index); if ARCHIVE.md is absent it emits a
   one-row `*(none)*` table. Relay whatever it prints verbatim.
@@ -269,36 +277,44 @@ a path entry shows as undocumented there).
 
 Boards made from older templates may list done/won't-do notes oldest first
 (appended at the bottom) and keep the old Conventions. The **⚠️ Drift** shows
-the `aren't newest first` and `conventions predate 0.7` rows for these (see
-Rules & format). After relaying a board that has either, offer once per render,
-in one combined question; after a decline, don't offer again in this
-conversation:
+the `conventions predate 0.7.1` row for these, after any `aren't newest first`
+rows (see Rules & format). After relaying a board that has it, offer once per
+render, in one combined question (with the pre-0.5 offer too, when its rows
+show); after a decline, don't offer again in this conversation:
 
-> "This board's `plans/README.md` predates 0.7.1: <its done/won't-do notes
-> aren't newest first; its Conventions predate start/finish and newest-first
-> notes>. Update it?" (name only the parts its rows flag)
+> "This board's `plans/README.md` predates 0.7.1: its Conventions don't say
+> done/won't-do notes go newest first<, and its done/won't-do notes aren't
+> newest first>. Update it?" (the bracketed part only when those rows show)
 
-On explicit approval, edit `plans/README.md` with your own tools:
+This is a plans-only edit, so it is made on `main` and pushed. First choose
+where: the main checkout (`git worktree list` shows it) only when it is on
+`main`, level with `origin/main` after `git fetch origin` (`git merge
+--ff-only --no-autostash origin/main` brings it level) and `plans/README.md`
+there is clean; otherwise `git worktree add --detach <dir> origin/main` and
+work there, removing it (`git worktree remove <dir>`) when done. Edit that
+checkout's `plans/README.md` — not this one's, which can differ from main's —
+with your own tools:
 
-1. Each flagged done/won't-do section: reorder its notes (each with its
-   continuation lines) newest first by the date in their plan's slug, keeping
-   same-date notes in their relative order — unless the whole section's dated
-   notes were oldest first (dates never going down), then reverse the
-   same-date groups too. Undated notes keep their place at the end.
-2. Conventions, with the bullets copied from `references/readme-template.md`:
+1. With the pre-0.5 rows, do **Migrate (pre-0.5 board)** steps 1–2 there
+   first.
+2. Every done and won't-do section, flagged or not: sort each run of notes
+   between headings (each note with its continuation lines; table rows as
+   rows) newest first by the date in their plan's slug, keeping same-date
+   notes in their relative order — unless the whole section's dated notes were
+   oldest first (dates never going down), then reverse the same-date groups
+   too. Undated notes stay where they are; only the dated notes are reordered
+   among the dated notes' places.
+3. Conventions, with the bullets copied from `references/readme-template.md`:
    replace the line "When work starts, move the plan to `active/`. When it
    ships, move it to `done/`." with the template's start/finish bullet (add it
    if neither is there), and add its newest-first bullet ("The `done` and
    `wont-do` sections list notes **newest first** …") after the `*.tasks.json`
    bullet (else at the end of the list) if missing. Change nothing else.
-3. Re-run the script: the migration rows must be gone.
-
-This is a plans-only edit, so it goes straight to `main` and is pushed: in a
-checkout of `main` (the main checkout; `git worktree list` shows it) brought
-level with `git fetch origin` and `git merge --ff-only --no-autostash
-origin/main`, make the edit there, commit just `plans/README.md` as `Plans:
-migrate the board to 0.7.1` and `git push origin HEAD:refs/heads/main`. A
-branch picks it up when it next merges `main`.
+4. Re-render with `--root <that checkout>`: the migration rows must be gone.
+5. Commit just `plans/README.md` there as `Plans: migrate the board to 0.7.1`
+   (one commit, the pre-0.5 migration included) and `git push origin
+   HEAD:refs/heads/main`. A rejected push → fetch, bring the checkout level and
+   redo the edit. A branch picks it up when it next merges `main`.
 
 ## Change the order (on request)
 

@@ -37,19 +37,22 @@ commented-out items are skipped. "Last 2 done" / "Last 2 won't-do": a newer
 date wins; plans with the same date follow the order of their notes in the
 README's done (or wont-do) section, top first (a `{design,plan}` note orders its
 pair, and a table-format section orders by its rows), then the same section of
-`ARCHIVE.md`, then plans with no note. A stale next-list entry, a leftover
+`ARCHIVE.md` (read from its next level of done headings when its shallowest is
+a bare index), then plans with no note. A stale next-list entry, a leftover
 backlog note or a Conventions bullet naming the plan above that section, and a
 fenced example or a commented-out item inside it, don't change the order.
 Migration: a board without the heading and
 an old-style bold "next … order" list are flagged as `plans/README.md` drift
 rows (full scope only), while prose and a bold line with no list are not. So
-are boards older than 0.7.1: a done or wont-do section with a dated note above
-a later-dated one (the line of the first such note), but not for same-date or
-undated notes, nor for stray mentions, fenced code or comments; and Conventions
-that keep the old "When it ships" line or never say "newest first" (a comment
-doesn't count), but not the template's, nor a board with no Conventions
-heading. These rows come last, after the pre-0.5 one, and this repo's own
-board lists its notes newest first. A
+are boards older than 0.7.1: Conventions that keep the old "When it ships"
+line or never say "newest first" (a comment doesn't count), but not the
+template's, nor a board with no Conventions heading; and, only with those
+Conventions, a done or wont-do section with a dated note (list item or table
+row) above a later-dated one in the same run of notes between headings (the
+line of the first such note), but not for same-date or undated notes, nor for
+stray mentions, fenced code or comments. The template with notes in finish
+order (not date order) shows no drift. These rows come last, after the pre-0.5
+one, and this repo's own board lists its notes newest first. A
 frozen copy of the 0.4.0 script (`fixtures/status_board/status_board_0_4_0.py`)
 reads the template and a migrated board with no drift, so old installs keep
 working. A code fence or a stray backtick no longer hides later backticked

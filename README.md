@@ -82,9 +82,10 @@ Older installs (0.4.x) still read migrated boards.
 **Upgrading to 0.7.1:** boards made from older templates may list done/won't-do
 notes oldest first and keep the old "When it ships, move it to `done/`."
 Conventions line. The board flags them under ⚠️ Drift (`done/won't-do notes
-aren't newest first` and `conventions predate 0.7`) and the skill offers, once,
+aren't newest first` and `conventions predate 0.7.1`) and the skill offers, once,
 to reorder those notes newest first and update the Conventions bullets — a
-plans-only commit (`Plans: migrate the board to 0.7.1`) pushed to `main`.
+plans-only commit (`Plans: migrate the board to 0.7.1`) pushed to `main`. Once
+migrated, a board is never flagged for its notes again.
 
 ### status-board — starting and finishing plans on main (0.7+)
 
