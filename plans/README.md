@@ -52,6 +52,7 @@ The board shows the ones still in backlog/, renumbered from 1. -->
 
 ## 🟢 done — shipped
 
+- `2026-10-18-status-board-0.7.1-done-order-design` — status-board 0.7.1: same-date plans in Last 2 done/won't-do follow their note's place in the README; older boards are offered a one-time upgrade (notes newest first, 0.7 Conventions); one shared README parser; PRs #11 and #12, merged 2026-10-18, released as v1.2.1.
 - `2026-10-17-status-board-start-and-finish-on-main-{design,plan}` — status-board 0.7.0: `/status-board:start` and `/status-board:finish` (a read-only check plans the steps, Claude runs them; a plan is done only after its PRs are merged), the board's missed-start/finish rows, the watchdog and the rewritten approval hook; PR #10, merged 2026-10-17, released as v1.2.0.
 - `2026-10-17-status-board-next-label-says-not-started-design` — status-board 0.6.1: the board header becomes `⚪ Not started: next, in order` and the template heading `## ⚪ not started — next, in order`; old `⏭` headings still match.
 - `2026-10-17-status-board-next-order-design` — status-board 0.5.0: "Next, in order" section, migration for pre-0.5 boards, 0.4.x compatibility; PR #7, merged 2026-10-17.
