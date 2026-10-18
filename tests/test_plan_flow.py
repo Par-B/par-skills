@@ -143,3 +143,129 @@ def test_start_unknown_plan(tmp_path):
     main = repos.make(tmp_path)
     rc, out = repos.run(FLOW, main, "start", "2026-09-09-nope")
     assert rc == 2 and out.startswith("NOT_FOUND"), out
+
+
+def _hook(repo_git_dir, name, body):
+    """An executable git hook `name` in the hooks dir `repo_git_dir`/hooks."""
+    hook = pathlib.Path(repo_git_dir) / "hooks" / name
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+
+def test_start_keeps_an_uncommitted_edit_on_the_branch(tmp_path):
+    main = repos.make(tmp_path)
+    fresh = "2026-01-03-fresh-design"
+    b = _worktree(main, tmp_path / "fresh", "fresh")
+    repos.plan(b, f"backlog/{fresh}")
+    repos.commit_all(b, "write the plan")
+    a = tmp_path / "a"
+    git(main, "worktree", "add", "-q", "-b", "a-work", str(a), "fresh")
+    repos.write(b, f"plans/backlog/{fresh}.md", "# Title\n\nhalf-written edit\n")
+    rc, out = repos.run(FLOW, a, "start", fresh)
+    assert rc == 0, out
+    assert (b / f"plans/backlog/{fresh}.md").read_text(encoding="utf-8") == \
+        "# Title\n\nhalf-written edit\n"
+    assert "note:" in out and "uncommitted" in out
+
+
+def test_start_never_deletes_a_differing_copy(tmp_path):
+    main = repos.make(tmp_path, files=(f"backlog/{THING}", f"backlog/{OTHER}"))
+    repos.write(main, f"plans/active/{THING}.md", "# Another copy\n")
+    repos.commit_all(main, "two copies")
+    git(main, "push", "-q")
+    before = repos.origin_files(main)
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 5 and "nothing was deleted" in out, out
+    assert repos.origin_files(main) == before
+    assert (main / f"plans/backlog/{THING}.md").is_file()
+
+
+def test_start_does_not_push_an_uncommitted_readme_edit(tmp_path):
+    main = repos.make(tmp_path)
+    edited = repos.README + "- half-written line\n"
+    repos.write(main, "plans/README.md", edited)
+    before = git(main, "rev-parse", "HEAD")
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 0, out
+    assert _readme_on_main(main) == repos.readme(
+        active=(THING,), nxt=(OTHER,), backlog=(OTHER,))
+    assert (main / "plans/README.md").read_text(encoding="utf-8") == edited
+    assert git(main, "rev-parse", "HEAD") == before
+    assert "left as it was" in out
+
+
+def test_start_does_not_push_an_uncommitted_plan_edit(tmp_path):
+    main = repos.make(tmp_path)
+    repos.write(main, f"plans/backlog/{THING}.md", "# Title\n\ndraft edit\n")
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 0, out
+    assert repos.show(main, f"origin/main:plans/active/{THING}.md") == f"# Title of {THING}\n"
+    assert (main / f"plans/backlog/{THING}.md").read_text(encoding="utf-8") == \
+        "# Title\n\ndraft edit\n"
+    assert "left as it was" in out
+
+
+def test_start_does_not_push_an_uncommitted_draft(tmp_path):
+    main = repos.make(tmp_path)
+    draft = "2026-01-05-draft"
+    repos.plan(main, f"backlog/{draft}")
+    before = repos.origin_files(main)
+    rc, out = repos.run(FLOW, main, "start", draft)
+    assert rc == 5 and "commit" in out, out
+    assert repos.origin_files(main) == before
+    assert (main / f"plans/backlog/{draft}.md").is_file()
+
+
+def test_start_reports_what_a_failed_commit_left_staged(tmp_path):
+    main = repos.make(tmp_path)
+    _hook(main / ".git", "pre-commit", "exit 1")
+    before = git(main, "rev-parse", "HEAD")
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 5 and "left staged" in out, out
+    assert f"plans/active/{THING}.md" in out and "plans/README.md" in out
+    assert git(main, "rev-parse", "HEAD") == before
+    assert f"plans/backlog/{THING}.md" in repos.origin_files(main)
+
+
+def test_start_stops_when_the_push_is_rejected(tmp_path):
+    main = repos.make(tmp_path)
+    _hook(tmp_path / "origin.git", "pre-receive", "exit 1")
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 5 and "then run start again" in out, out
+    assert f"plans/backlog/{THING}.md" in repos.origin_files(main)
+    assert not repos.has_ref(main, "refs/heads/thing")
+
+
+def test_start_undoes_a_conflicting_merge(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "thing", "thing")
+    text = repos.README.replace(f"- `{THING}` — note of {THING}.",
+                                f"- `{THING}` — edited on the branch.")
+    repos.write(wt, "plans/README.md", text)
+    repos.commit_all(wt, "edit the note")
+    head = git(wt, "rev-parse", "HEAD")
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 5 and "CONFLICT" in out and "then run start again" in out, out
+    assert git(wt, "rev-parse", "HEAD") == head
+    assert git(wt, "status", "--porcelain") == ""
+
+
+def test_start_refuses_a_bad_branch_name(tmp_path):
+    main = repos.make(tmp_path)
+    before = repos.origin_files(main)
+    for name in ("bad..name", "main"):
+        rc, out = repos.run(FLOW, main, "start", THING, "--branch", name)
+        assert rc == 5, out
+        assert repos.origin_files(main) == before
+
+
+def test_start_checks_every_move_before_making_one(tmp_path):
+    main = repos.make(tmp_path, files=(f"backlog/{BASE}-design", f"backlog/{BASE}-plan"))
+    repos.write(main, f"plans/active/{BASE}-plan.md", "# Another copy\n")
+    repos.commit_all(main, "two copies of the plan")
+    git(main, "push", "-q")
+    rc, out = repos.run(FLOW, main, "start", f"{BASE}-plan.md")
+    assert rc == 5 and "nothing was deleted" in out, out
+    assert f"plans/backlog/{BASE}-plan.md" in out and f"plans/active/{BASE}-plan.md" in out
+    assert git(main, "status", "--porcelain") == ""

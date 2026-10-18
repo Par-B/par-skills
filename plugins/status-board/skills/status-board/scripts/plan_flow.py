@@ -60,8 +60,11 @@ class NotFound(Exception):
 
 def git(cwd, *args):
     """git's stdout, run in `cwd`; Stop with git's own message when it fails."""
-    p = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+    try:
+        p = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+    except OSError:
+        raise Stop("git is not installed") from None
     if p.returncode:
         raise Stop(f"git {' '.join(args)}: {(p.stderr or p.stdout).strip()}")
     return p.stdout.strip()
@@ -103,21 +106,26 @@ def temp_checkout(cwd, ref, detach=True):
     """A throwaway worktree of `ref` (detached, or on branch `ref`), removed after."""
     base = tempfile.mkdtemp(prefix="status-board-")
     path = os.path.join(base, "wt")
-    git(cwd, "worktree", "add", "--quiet", *(["--detach"] if detach else []), path, ref)
+    added = False
     try:
+        git(cwd, "worktree", "add", "--quiet", *(["--detach"] if detach else []),
+            path, ref)
+        added = True
         yield path
     finally:
-        git_try(cwd, "worktree", "remove", "--force", path)
+        if added:
+            git_try(cwd, "worktree", "remove", "--force", path)
         shutil.rmtree(base, ignore_errors=True)
-        git_try(cwd, "worktree", "prune")
 
 
 @contextlib.contextmanager
-def on_main(cwd, main, plans, report):
+def on_main(cwd, main, plans, guarded, report):
     """Yield (path, temporary): a checkout of `main` level with the remote's —
-    the main checkout when it is on `main` with no changes outside plans/, else
-    a temporary worktree. Stops when the local `main` has commits the remote
-    lacks: pushing them would not be a plans-only change."""
+    the main checkout when it is on `main` with no changes outside plans/ and
+    none (untracked included) to the `guarded` paths, else a temporary
+    worktree, so no uncommitted edit is committed or pushed. Stops when the
+    local `main` has commits the remote lacks: pushing them would not be a
+    plans-only change."""
     git(cwd, "fetch", "--quiet", REMOTE)
     upstream = f"refs/remotes/{REMOTE}/{main}"
     if not has_ref(cwd, upstream):
@@ -127,12 +135,14 @@ def on_main(cwd, main, plans, report):
         ahead = int(git(cwd, "rev-list", "--count", f"{upstream}..{local}"))
         behind = int(git(cwd, "rev-list", "--count", f"{local}..{upstream}"))
         if ahead:
-            how = "has diverged from" if behind else f"is {ahead} commit(s) ahead of"
+            how, fix = (("has diverged from", "merge or drop") if behind else
+                        (f"is {ahead} commit(s) ahead of", "push or drop"))
             raise Stop(f"local {main} {how} {REMOTE}/{main}; plans-only commits go to "
-                       f"{main} alone, so push or drop those commits first")
+                       f"{main} alone, so {fix} those commits first")
     path = checkouts(cwd).get(main)
-    if path and not git(path, "status", "--porcelain", "--untracked-files=no",
-                        "--", ".", f":(exclude){plans}"):
+    if (path and not git(path, "status", "--porcelain", "--untracked-files=no",
+                         "--", ".", f":(exclude){plans}")
+            and not dirty(path, guarded)):
         git(path, "merge", "--ff-only", "--quiet", upstream)
         yield path, False
         return
@@ -169,13 +179,45 @@ def fallback_note(abs_plans, found, base):
     return [f"- `{slug}` — {sb.fallback_desc(os.path.join(abs_plans, state, f))}"]
 
 
+def guarded_paths(plans, base):
+    """The README and every path the plan's files and trackers may have."""
+    return [f"{plans}/README.md"] + [
+        f"{plans}/{state}/{pat.format(base)}{ext}"
+        for state in sb.STATES for pat in PAIR for ext in ("", ".tasks.json")]
+
+
+def dirty(path, paths):
+    """True when checkout `path` has any change to `paths`, untracked included."""
+    return bool(git(path, "status", "--porcelain", "--untracked-files=all", "--", *paths))
+
+
 def require_board(path, plans, main):
-    if not os.path.isfile(os.path.join(path, plans, "README.md")):
+    readme = os.path.join(path, plans, "README.md")
+    if not os.path.isfile(readme):
         raise Stop(f"no {plans}/README.md on {main}; set the board up there first")
+    with open(readme, encoding="utf-8") as fh:
+        if not plan_readme.has_section(fh.read(), "active"):
+            raise Stop(f"{plans}/README.md on {main} has no active section")
+
+
+def mentions(text, stems):
+    """The `stems` that `text` names anywhere, backticked or as a .md filename."""
+    found = set()
+    for rx in (sb.BACKTICK_RE, sb.MD_TOKEN_RE):
+        for m in rx.finditer(text):
+            tok = (m.group(1) if rx is sb.BACKTICK_RE else m.group(0)).strip()
+            found |= {sb.stem(t.rsplit("/", 1)[-1]) for t in sb.brace_expand(tok)}
+    return found & set(stems)
 
 
 def tracked(path, rel):
     return git_try(path, "ls-files", "--error-unmatch", "--", rel) is not None
+
+
+def in_head(path, rel):
+    """True when HEAD holds `rel`: only then does its removal belong in the
+    commit's pathspec."""
+    return git_try(path, "cat-file", "-e", f"HEAD:{rel}") is not None
 
 
 def move(path, src, dst, touched):
@@ -183,7 +225,8 @@ def move(path, src, dst, touched):
     os.makedirs(os.path.dirname(os.path.join(path, dst)), exist_ok=True)
     if tracked(path, src):
         git(path, "mv", src, dst)
-        touched.append(src)
+        if in_head(path, src):
+            touched.append(src)
     else:
         os.replace(os.path.join(path, src), os.path.join(path, dst))
         git(path, "add", "--", dst)
@@ -194,14 +237,29 @@ def remove(path, rel, touched):
     """Delete a file inside checkout `path`, staged when it is tracked."""
     if tracked(path, rel):
         git(path, "rm", "--quiet", "--force", "--", rel)
-        touched.append(rel)
+        if in_head(path, rel):
+            touched.append(rel)
     else:
         os.remove(os.path.join(path, rel))
 
 
+def check_drop(path, src, dst, copy=None):
+    """Stop unless src may be deleted in favour of dst: the same bytes as dst
+    (or as `copy`, the file dst will be moved from) and no uncommitted change."""
+    with open(os.path.join(path, src), "rb") as a, \
+            open(os.path.join(path, copy or dst), "rb") as b:
+        same = a.read() == b.read()
+    if not same or (tracked(path, src) and
+                    git_try(path, "diff", "--quiet", "HEAD", "--", src) is None):
+        raise Stop(f"{src} and {dst} differ (or {src} has uncommitted changes); "
+                   f"nothing was deleted — keep one, then run start again")
+
+
 def relocate(path, src, dst, touched):
-    """Move src to dst, or just delete src when dst is there already."""
+    """Move src to dst, or, when dst is there already, delete src — but only
+    when it is the same bytes and holds no uncommitted change."""
     if os.path.exists(os.path.join(path, dst)):
+        check_drop(path, src, dst)
         remove(path, src, touched)
     else:
         move(path, src, dst, touched)
@@ -215,23 +273,37 @@ def put_in_state(path, plans, base, to, fallback):
     the paths it changed."""
     found = find_pair(os.path.join(path, plans), base)
     names = sorted({f for _, f in found})
-    touched = []
-    for state, f in found:
-        if state != to:
-            relocate(path, f"{plans}/{state}/{f}", f"{plans}/{to}/{f}", touched)
+    rel = f"{plans}/README.md"
+    with open(os.path.join(path, rel), encoding="utf-8", newline="") as fh:
+        text = fh.read()
+    try:
+        new = plan_readme.move_notes(text, {sb.stem(f) for f in names}, to, fallback)
+    except ValueError as e:
+        raise Stop(f"could not edit {plans}/README.md safely: {e}; nothing was "
+                   f"committed") from None
+    moves = [(f"{plans}/{state}/{f}", f"{plans}/{to}/{f}")
+             for state, f in found if state != to]
+    drops = []
     for state in sb.STATES:
         for f in names:
             src = f"{plans}/{state}/{f}.tasks.json"
             if not os.path.isfile(os.path.join(path, src)):
                 continue
             if to in TERMINAL:
-                remove(path, src, touched)
+                drops.append(src)
             elif state != to:
-                relocate(path, src, f"{plans}/{to}/{f}.tasks.json", touched)
-    rel = f"{plans}/README.md"
-    with open(os.path.join(path, rel), encoding="utf-8", newline="") as fh:
-        text = fh.read()
-    new = plan_readme.move_notes(text, {sb.stem(f) for f in names}, to, fallback)
+                moves.append((src, f"{plans}/{to}/{f}.tasks.json"))
+    filled = {}                           # dst -> the src that will be moved there
+    for src, dst in moves:                # check them all before changing any
+        if os.path.exists(os.path.join(path, dst)) or dst in filled:
+            check_drop(path, src, dst, filled.get(dst))
+        else:
+            filled[dst] = src
+    touched = []
+    for src, dst in moves:
+        relocate(path, src, dst, touched)
+    for src in drops:
+        remove(path, src, touched)
     if new != text:
         with open(os.path.join(path, rel), "w", encoding="utf-8", newline="") as fh:
             fh.write(new)
@@ -240,12 +312,21 @@ def put_in_state(path, plans, base, to, fallback):
     return touched
 
 
-def commit(path, message, touched):
+def commit(path, message, touched, temporary):
     """Commit just the `touched` paths (other staged work in that checkout stays
-    staged); False when they hold no change."""
+    staged); False when they hold no change. When the commit fails in a
+    checkout that stays, say what it left staged there (nothing is undone, so
+    no content is lost)."""
     if not touched or git_try(path, "diff", "--cached", "--quiet", "--", *touched) is not None:
         return False
-    git(path, "commit", "--quiet", "-m", message, "--", *touched)
+    try:
+        git(path, "commit", "--quiet", "-m", message, "--", *touched)
+    except Stop as e:
+        if temporary:
+            raise
+        raise Stop(f"{e}\nthese paths were left staged in {path}: "
+                   f"{', '.join(touched)}; commit or unstage them, then run start "
+                   f"again") from None
     return True
 
 
@@ -256,7 +337,7 @@ def push(path, main, temporary):
     except Stop as e:
         left = ("nothing was kept; run it again" if temporary else
                 f"the commit is on {main} in {path}, not pushed; pull with --rebase "
-                f"there, then push")
+                f"there and push, then run start again")
         raise Stop(f"{e}\n{left}") from None
 
 
@@ -268,11 +349,24 @@ def bring_over(root, path, plans, base):
     found = find_pair(src, base)
     if not found:
         raise NotFound(f"no plan {base} in {src} or on the main branch")
+    ended = [f"{plans}/{s}/{f}" for s, f in found if s in TERMINAL]
+    if ended:
+        raise Stop(f"{ended[0]} is already ended in {root}; nothing was done")
+    pick = {}
+    for state, f in found:                # STATES order: the copy nearest active
+        pick.setdefault(f, state)
+    found = [(s, f) for f, s in pick.items()]
+    unsaved = [f"{plans}/{s}/{f}" for s, f in found
+               if dirty(root, [f"{plans}/{s}/{f}"])]
+    if unsaved:
+        raise Stop(f"{', '.join(unsaved)} in {root} is not committed; commit it "
+                   f"first, then run start again (nothing was done)")
     touched = []
     for state, f in found:
         rel = f"{plans}/active/{f}"
         os.makedirs(os.path.dirname(os.path.join(path, rel)), exist_ok=True)
-        shutil.copyfile(os.path.join(src, state, f), os.path.join(path, rel))
+        if not os.path.exists(os.path.join(path, rel)):
+            shutil.copyfile(os.path.join(src, state, f), os.path.join(path, rel))
         git(path, "add", "--", rel)
         touched.append(rel)
     notes = []
@@ -282,10 +376,11 @@ def bring_over(root, path, plans, base):
     return touched, notes or fallback_note(src, found, base)
 
 
-def merge_into(path, plans, base, branch, sha, main, where):
+def merge_into(path, plans, base, branch, sha, main, where, temporary):
     """Bring `branch` (checked out at `path`) up to the remote's copy of it and
     merge `sha` into it, never rebasing; then give the branch's own copy of
-    the plan, if it has one, the same move to active/."""
+    the plan, if it has one, the same move to active/ — unless that checkout
+    has uncommitted changes to it or the README, which stay as they are."""
     up = f"refs/remotes/{REMOTE}/{branch}"
     if has_ref(path, up):
         theirs = int(git(path, "rev-list", "--count", f"HEAD..{up}"))
@@ -297,17 +392,28 @@ def merge_into(path, plans, base, branch, sha, main, where):
             git(path, "merge", "--ff-only", "--quiet", up)
     if git_try(path, "merge-base", "--is-ancestor", sha, "HEAD") is not None:
         did = f"{branch} already has {sha[:7]}"
-    elif git_try(path, "merge", "--quiet", "--no-edit", "-m",
-                 f"Merge {main} into {branch}", sha) is not None:
-        did = f"merged {main} ({sha[:7]}) into {branch}"
+    elif git_try(path, "rev-parse", "--quiet", "--verify", "MERGE_HEAD") is not None:
+        # aborting after a failed merge would throw away this one's resolution
+        raise Stop(f"{path} is in the middle of a merge; finish or abort it, then "
+                   f"run start again")
     else:
-        git_try(path, "merge", "--abort")
-        raise Stop(f"merging {main} into {branch} stopped (a conflict, or changes in "
-                   f"the way) and was undone; run `git merge {sha[:7]}` on {branch} "
-                   f"by hand")
-    if commit(path, f"Plans: start {base}", put_in_state(path, plans, base, "active", [])):
+        try:
+            git(path, "merge", "--no-edit", "-m", f"Merge {main} into {branch}", sha)
+        except Stop as e:
+            git_try(path, "merge", "--abort")
+            raise Stop(f"merging {main} into {branch} stopped and was undone: {e}\n"
+                       f"run `git merge {sha[:7]}` on {branch} by hand, then run "
+                       f"start again") from None
+        did = f"merged {main} ({sha[:7]}) into {branch}"
+    notes = []
+    if dirty(path, guarded_paths(plans, base)):
+        notes.append(f"note: {path} has uncommitted changes to the plan or "
+                     f"{plans}/README.md, so the branch's own copy was not moved to "
+                     f"active/; move it there when they are committed")
+    elif commit(path, f"Plans: start {base}",
+                put_in_state(path, plans, base, "active", []), temporary):
         did += ", then moved the branch's own copy of the plan to active/"
-    return f"branch: {did} ({where})"
+    return [f"branch: {did} ({where})"] + notes
 
 
 def sync_branch(root, plans, base, branch, sha, main):
@@ -320,10 +426,10 @@ def sync_branch(root, plans, base, branch, sha, main):
         git(root, "branch", "--quiet", "--track", branch, f"{REMOTE}/{branch}")
     path = checkouts(root).get(branch)
     if path:
-        return [merge_into(path, plans, base, branch, sha, main, path)]
+        return merge_into(path, plans, base, branch, sha, main, path, False)
     with temp_checkout(root, branch, detach=False) as tmp:
-        return [merge_into(tmp, plans, base, branch, sha, main,
-                           "in a temporary checkout; no worktree yet")]
+        return merge_into(tmp, plans, base, branch, sha, main,
+                          "in a temporary checkout; not pushed; no worktree yet", True)
 
 
 def start(root, plans, name, branch):
@@ -331,8 +437,12 @@ def start(root, plans, name, branch):
     main = main_branch(root)
     base = plan_base(name)
     branch = branch or sb.DATE_RE.sub("", base)
+    if git_try(root, "check-ref-format", "--branch", branch) is None:
+        raise Stop(f"{branch!r} is not a valid branch name; nothing was done")
+    if branch == main:
+        raise Stop(f"the plan's branch cannot be {main} itself; nothing was done")
     report = []
-    with on_main(root, main, plans, report) as (path, temporary):
+    with on_main(root, main, plans, guarded_paths(plans, base), report) as (path, temporary):
         require_board(path, plans, main)
         abs_plans = os.path.join(path, plans)
         found = find_pair(abs_plans, base)
@@ -343,8 +453,20 @@ def start(root, plans, name, branch):
             touched, fallback = [], fallback_note(abs_plans, found, base)
         else:
             touched, fallback = bring_over(root, path, plans, base)
+        stems = {sb.stem(f) for _, f in find_pair(abs_plans, base)}
+        readme = os.path.join(abs_plans, "README.md")
+        with open(readme, encoding="utf-8") as fh:
+            had_note = bool(plan_readme.find_notes(fh.read(), stems))
         touched += put_in_state(path, plans, base, "active", fallback)
-        if commit(path, f"Plans: start {base}", touched):
+        if not had_note:
+            with open(readme, encoding="utf-8") as fh:
+                text = fh.read()
+            notes = set(plan_readme.find_notes(text, stems))
+            rest = "\n".join(line for line in text.splitlines() if line not in notes)
+            for s in sorted(mentions(rest, stems)):
+                report.append(f"note: {s} is mentioned in {plans}/README.md outside a "
+                              f"list note; added a list note — check the old entry")
+        if commit(path, f"Plans: start {base}", touched, temporary):
             push(path, main, temporary)
             report.append(f"{main}: {git(path, 'rev-parse', '--short', 'HEAD')} "
                           f"Plans: start {base} — pushed")
