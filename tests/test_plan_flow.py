@@ -1,4 +1,9 @@
+import os
 import pathlib
+import subprocess
+import sys
+
+import pytest
 
 import plan_repos as repos
 from plan_repos import OTHER, THING, git
@@ -6,6 +11,9 @@ from plan_repos import OTHER, THING, git
 REPO = pathlib.Path(__file__).resolve().parents[1]
 FLOW = REPO / "plugins/status-board/skills/status-board/scripts/plan_flow.py"
 BASE = "2026-01-01-thing"
+
+sys.path.insert(0, str(FLOW.parent))
+import plan_flow  # noqa: E402
 
 
 def _readme_on_main(cwd):
@@ -268,4 +276,188 @@ def test_start_checks_every_move_before_making_one(tmp_path):
     rc, out = repos.run(FLOW, main, "start", f"{BASE}-plan.md")
     assert rc == 5 and "nothing was deleted" in out, out
     assert f"plans/backlog/{BASE}-plan.md" in out and f"plans/active/{BASE}-plan.md" in out
+    assert git(main, "status", "--porcelain") == ""
+
+
+def test_start_stops_when_the_branch_commit_fails_after_the_merge(tmp_path):
+    main = repos.make(tmp_path)
+    wt = _worktree(main, tmp_path / "thing", "thing")
+    repos.plan(wt, f"backlog/{BASE}-plan")
+    repos.commit_all(wt, "write the plan")
+    _hook(main / ".git", "pre-commit",
+          '[ "$(git rev-parse --abbrev-ref HEAD)" = thing ] && exit 1; exit 0')
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 5 and "left staged" in out, out
+    assert "merged main (" in out and "then run start again" in out
+
+
+def test_start_stops_on_a_branch_in_the_middle_of_a_merge(tmp_path):
+    main = repos.make(tmp_path)
+    assert repos.run(FLOW, main, "start", THING)[0] == 0
+    wt = tmp_path / "thing"
+    git(main, "worktree", "add", "-q", str(wt), "thing")
+    git(wt, "switch", "-q", "-c", "side")
+    repos.write(wt, "src.txt", "side\n")
+    repos.commit_all(wt, "side")
+    git(wt, "switch", "-q", "thing")
+    repos.write(wt, "src.txt", "thing\n")
+    repos.commit_all(wt, "thing")
+    conflict = subprocess.run(["git", "-C", str(wt), "merge", "side"],
+                              capture_output=True, env=repos.ENV, check=False)
+    assert conflict.returncode != 0
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 5 and "in the middle of a merge" in out, out
+
+
+def test_start_reports_a_stray_mention_after_the_main_line(tmp_path):
+    text = repos.readme(nxt=(OTHER,), backlog=(OTHER,)) + f"| `{THING}` | a row |\n"
+    main = repos.make(tmp_path, text=text)
+    rc, out = repos.run(FLOW, main, "start", THING)
+    assert rc == 0, out
+    assert out.index("main:") < out.index("note:"), out
+
+
+# --- finish ------------------------------------------------------------------
+
+def test_finish_after_the_branch_did_the_move(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    other = repos.clone(tmp_path, "other")
+    git(other, "mv", f"plans/active/{THING}.md", f"plans/done/{THING}.md")
+    repos.write(other, "plans/README.md", repos.readme(done=(THING,)))
+    repos.commit_all(other, "the branch, merged")
+    git(other, "push", "-q")
+    merged = git(other, "rev-parse", "HEAD")
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 0, out
+    assert "nothing to put right" in out
+    assert git(main, "rev-parse", "HEAD") == merged
+    assert git(main, "rev-parse", "origin/main") == merged
+
+
+def test_finish_puts_right_what_the_branch_missed(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    repos.write(main, f"plans/active/{THING}.md.tasks.json", "{}\n")
+    repos.commit_all(main, "tracker")
+    git(main, "push", "-q")
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 0, out
+    files = repos.origin_files(main)
+    assert f"plans/done/{THING}.md" in files
+    assert not any(p.endswith(".tasks.json") for p in files)
+    assert _readme_on_main(main) == repos.readme(done=(THING,))
+    assert git(main, "log", "-1", "--format=%s") == f"Plans: {BASE} done"
+
+
+def test_finish_twice_commits_once(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    assert repos.run(FLOW, main, "finish", THING)[0] == 0
+    first = git(main, "rev-parse", "origin/main")
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 0 and "nothing to put right" in out, out
+    git(main, "fetch", "-q")
+    assert git(main, "rev-parse", "origin/main") == first
+
+
+def test_finish_wont_do(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    rc, out = repos.run(FLOW, main, "finish", THING, "--wont-do")
+    assert rc == 0, out
+    assert f"plans/wont-do/{THING}.md" in repos.origin_files(main)
+    assert _readme_on_main(main) == repos.readme(wontdo=(THING,))
+    assert git(main, "log", "-1", "--format=%s") == f"Plans: {BASE} won't do"
+
+
+def test_finish_plan_not_on_main(tmp_path):
+    main = repos.make(tmp_path)
+    rc, out = repos.run(FLOW, main, "finish", "2026-09-09-nope")
+    assert rc == 2 and "has its branch been merged" in out, out
+
+
+def _tracked_tracker(tmp_path):
+    """A main checkout with THING in active/ and its tracker committed."""
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    repos.write(main, f"plans/active/{THING}.md.tasks.json", "{}\n")
+    repos.commit_all(main, "tracker")
+    git(main, "push", "-q")
+    return main
+
+
+def test_finish_keeps_live_task_progress_in_the_main_checkout(tmp_path):
+    main = _tracked_tracker(tmp_path)
+    tracker = main / f"plans/active/{THING}.md.tasks.json"
+    tracker.write_text('{"done": 3}\n', encoding="utf-8")
+    before = git(main, "rev-parse", "HEAD")
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 0, out
+    assert tracker.read_text(encoding="utf-8") == '{"done": 3}\n'
+    assert git(main, "rev-parse", "HEAD") == before
+    files = repos.origin_files(main)
+    assert f"plans/done/{THING}.md" in files
+    assert not any(p.endswith(".tasks.json") for p in files)
+    assert "left as it was" in out and "has uncommitted changes" in out
+
+
+def test_finish_keeps_an_untracked_tracker_in_the_main_checkout(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    tracker = main / f"plans/active/{THING}.md.tasks.json"
+    tracker.write_text("{}\n", encoding="utf-8")
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 0, out
+    assert tracker.read_text(encoding="utf-8") == "{}\n"
+    assert f"plans/done/{THING}.md" in repos.origin_files(main)
+    assert "left as it was" in out
+
+
+def _drop_tracker(tmp_path, monkeypatch, text, commit):
+    """put_in_state(…"done"…), run in-process, on a main checkout whose THING
+    tracker holds `text` (committed first as "{}" when `commit`); returns
+    (checkout, tracker path, the Stop message)."""
+    for k in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(k)
+    for k, v in repos.ENV.items():
+        monkeypatch.setenv(k, v)
+    main = (_tracked_tracker(tmp_path) if commit else
+            repos.make(tmp_path, files=(f"active/{THING}",),
+                       text=repos.readme(active=(THING,))))
+    tracker = f"plans/active/{THING}.md.tasks.json"
+    repos.write(main, tracker, text)
+    with pytest.raises(plan_flow.Stop) as stop:
+        plan_flow.put_in_state(str(main), "plans", BASE, "done", [], "finish")
+    return main, tracker, str(stop.value)
+
+
+def test_put_in_state_never_drops_an_unsaved_tracker(tmp_path, monkeypatch):
+    main, tracker, msg = _drop_tracker(tmp_path, monkeypatch, '{"done": 3}\n', True)
+    assert tracker in msg and "run finish again" in msg
+    assert git(main, "status", "--porcelain") == f"M {tracker}"
+
+
+def test_put_in_state_never_drops_an_untracked_tracker(tmp_path, monkeypatch):
+    main, tracker, msg = _drop_tracker(tmp_path, monkeypatch, "{}\n", False)
+    assert tracker in msg
+    assert git(main, "status", "--porcelain") == f"?? {tracker}"
+
+
+def test_finish_stops_when_the_push_is_rejected(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{THING}",),
+                      text=repos.readme(active=(THING,)))
+    _hook(tmp_path / "origin.git", "pre-receive", "exit 1")
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 5 and "then run finish again" in out, out
+    assert "start" not in out
+    assert f"plans/active/{THING}.md" in repos.origin_files(main)
+
+
+def test_finish_needs_the_target_section(tmp_path):
+    text = repos.readme(active=(THING,)).replace("## 🟢 done — shipped\n\n*(none)*\n\n", "")
+    main = repos.make(tmp_path, files=(f"active/{THING}",), text=text)
+    rc, out = repos.run(FLOW, main, "finish", THING)
+    assert rc == 5 and "no done section" in out, out
+    assert f"plans/active/{THING}.md" in repos.origin_files(main)
     assert git(main, "status", "--porcelain") == ""
