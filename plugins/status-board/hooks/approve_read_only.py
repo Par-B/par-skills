@@ -6,18 +6,21 @@ invocation of this plugin's own copy of a read-only script, emits an `allow`
 decision so the user isn't prompted. For anything else it emits nothing, so
 normal permission prompting applies.
 
-Auto-approved — by bare `python3` or `python` (no interpreter path), optionally
-prefixed by STATUS_BOARD_WARN_SECS=<n> and/or STATUS_BOARD_KILL_SECS=<n> (the
-watchdog's timers), with the script path resolving to the file shipped in this
-plugin install:
+Auto-approved — by bare, unquoted `python3` or `python` (no interpreter path),
+optionally prefixed by unquoted STATUS_BOARD_WARN_SECS=<n> and/or
+STATUS_BOARD_KILL_SECS=<n> (the watchdog's timers), with an absolute script
+path resolving to the file shipped in this plugin install:
   * status_board.py         (any args — renders the board, read-only)
   * plan_flow.py check ...  (reads only; prints the facts and the steps to run)
 
 Never auto-approved (these always prompt):
   * plan_flow.py with no subcommand or any subcommand other than `check`
+  * plan_flow.py check with --root (or a prefix of it): another directory's
+    git config could run commands under `git status`
   * the git commands, README edits and other steps the check prints
-  * a script anywhere else, even with the same name, or an interpreter by path
-  * any other environment assignment in front of the interpreter
+  * a script anywhere else, even with the same name; a relative script path;
+    an interpreter by path or in quotes
+  * any other environment assignment in front of the interpreter, or a quoted one
   * any character outside letters, digits, space and _ . / \\ : = " ' -
     (so no chaining, redirection, expansion, globbing or substitution)
   * any other command
@@ -33,8 +36,11 @@ import sys
 # Anything outside this set may make bash or zsh do more than run one command
 # with literal arguments ($, braces, globs, ~, =(...), #, ;, ...). Refusing a
 # legitimate command only costs a prompt.
-ALLOWED_RE = re.compile(r"""^[A-Za-z0-9_ ./\\:="'-]+$""")
+ALLOWED_RE = re.compile(r"""[A-Za-z0-9_ ./\\:="'-]+""")
 ASSIGN_RE = re.compile(r"^STATUS_BOARD_(WARN|KILL)_SECS=\d+(\.\d+)?$")
+# Checked on the raw text: a quoted assignment or interpreter is a command name
+# to the shell (looked up on PATH), though shlex strips the quotes.
+PREFIX_RE = re.compile(r"(?:STATUS_BOARD_(?:WARN|KILL)_SECS=\d+(?:\.\d+)? +)*python3? ")
 SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        os.pardir, "skills", "status-board", "scripts")
 
@@ -47,7 +53,9 @@ def _is_own(tok, name):
 
 
 def decide(command: str) -> bool:
-    if not command or not ALLOWED_RE.match(command):
+    if not command or not ALLOWED_RE.fullmatch(command):
+        return False
+    if not PREFIX_RE.match(command):
         return False
     try:
         toks = shlex.split(command)
@@ -58,13 +66,20 @@ def decide(command: str) -> bool:
     if len(toks) < 2 or toks[0] not in ("python", "python3"):
         return False
     script = toks[1]
-    if not script or script.startswith("-"):
+    # A relative path would resolve against the hook's cwd, not the shell's.
+    if script.startswith("-") or not os.path.isabs(script.replace("\\", "/")):
         return False
     if _is_own(script, "status_board.py"):
         return True
     if _is_own(script, "plan_flow.py"):
-        return toks[2:3] == ["check"]
+        return toks[2:3] == ["check"] and not any(map(_is_root_opt, toks[3:]))
     return False
+
+
+def _is_root_opt(tok):
+    # argparse accepts any unambiguous prefix (--ro, --roo) and --opt=value.
+    opt = tok.split("=", 1)[0]
+    return len(opt) >= 3 and "--root".startswith(opt)
 
 
 def main() -> int:

@@ -147,6 +147,40 @@ def test_refuses_other_or_bad_assignments():
 
 
 # ------- NOT approved: other scripts and interpreters -------
+# A quoted assignment is a command name to the shell, not an assignment.
+def test_refuses_quoted_prefixes():
+    assert not approve.decide(f"""'STATUS_BOARD_KILL_SECS=5' python3 "{BOARD}\"""")
+    assert not approve.decide(f'STATUS_BOARD_KILL_SECS"=5" python3 "{BOARD}"')
+    assert not approve.decide(f'"STATUS_BOARD_KILL_SECS=5" python3 "{BOARD}"')
+    assert not approve.decide(f'"python3" "{BOARD}"')
+    assert not approve.decide(f"'python' \"{BOARD}\"")
+    assert not approve.decide(f'py"thon3" "{BOARD}"')
+
+
+# The shell resolves a relative path against its own cwd, not the hook's.
+def test_refuses_relative_script_even_from_the_scripts_dir(monkeypatch):
+    monkeypatch.chdir(SCRIPTS)
+    assert not approve.decide('python3 status_board.py --scope full')
+    assert not approve.decide('python3 ./status_board.py')
+    assert not approve.decide('python3 plan_flow.py check start x')
+
+
+def test_refuses_trailing_newline():
+    assert not approve.decide(f'python3 "{BOARD}" --scope full\n')
+
+
+# --root would point the auto-approved check at any directory's git config.
+def test_refuses_plan_flow_check_with_root():
+    for opt in ("--root /tmp", "--root=/tmp", "--roo /tmp", "--ro=/tmp", "--r /tmp"):
+        assert not approve.decide(f'python3 "{FLOW}" check start x {opt}'), opt
+    assert not approve.decide(f'python3 "{FLOW}" check --root /tmp finish x')
+
+
+def test_board_still_accepts_root():
+    assert approve.decide(f'python3 "{BOARD}" --scope full --root /tmp')
+    assert approve.decide(f'python3 "{BOARD}" --root=/tmp')
+
+
 def test_refuses_lookalike_scripts():
     assert not approve.decide(f'python3 "{SCRIPTS / "status_board_evil.py"}"')
     assert not approve.decide(f'python3 "{SCRIPTS / "plan_readme.py"}"')
