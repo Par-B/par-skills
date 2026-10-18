@@ -6,8 +6,10 @@ the source of truth; descriptions are enriched from plans/README.md notes (and,
 for archived plans, from a sibling plans/ARCHIVE.md if present), with a fallback
 to each plan file's title. Drift between folders and README is flagged, as
 are pre-0.5 boards (no "next — in order" heading, or an old bold "next … order"
-list) so the skill can offer migration. An optional "next — in order" list in
-README.md becomes a "Not started: next, in order" section drawn from backlog/.
+list) so the skill can offer migration. Rendered off the main branch, it also
+compares plans/ with origin/main (read-only git) and flags a start or finish
+missed there. An optional "next — in order" list in README.md becomes a
+"Not started: next, in order" section drawn from backlog/.
 
 Two-tier archive: README.md is the CURRENT board (active/backlog/future-ideas +
 recently-done for the current+previous release). Older done/wont-do descriptions
@@ -19,24 +21,30 @@ Usage:  status_board.py [--root DIR]
 Exit codes: 0 = board rendered, 3 = no board found (caller should offer bootstrap).
 
 Security properties (for auditors — each is verifiable against the code below):
-  * Standard library only: imports argparse, os, re, sys. No third-party
-    packages, no dynamic imports.
+  * Standard library only: imports argparse, os, re, subprocess, sys. No
+    third-party packages, no dynamic imports.
+  * Read-only git: the only subprocess is git (see git_out), and only commands
+    that read — symbolic-ref (one argument), ls-tree, merge-base --is-ancestor
+    and for-each-ref — to compare plans/ with the remote's main (main_drift).
+    It never fetches, pushes, commits or checks out. No git: the check is
+    skipped.
   * Read-only: every open() below uses the default read mode (see parse_readme,
     parse_next_order and fallback_desc). The script never writes, creates,
     deletes, or renames anything on disk.
-  * No code execution: no subprocess / os.system / eval / exec / compile /
-    __import__. File contents are read as text and pattern-matched only — never
+  * No code execution: no os.system / eval / exec / compile / __import__, no
+    shell. File contents are read as text and pattern-matched only — never
     interpreted or run.
-  * No network: no sockets, no urllib/http, no outbound calls of any kind.
-  * Bounded I/O: the only inputs are the --root/--scope CLI args and files under
-    <root>/plans/. The only output is the Markdown table (or the "NO_BOARD"
-    sentinel) printed to stdout. Nothing outside <root>/plans/ is read.
+  * No network: no sockets, no urllib/http; git is never asked to fetch or push.
+  * Bounded I/O: the only inputs are the --root/--scope CLI args, files under
+    <root>/plans/ and the repo's git refs. The only output is the Markdown table
+    (or the "NO_BOARD" sentinel) printed to stdout.
   * No ReDoS: every regex is a simple linear pattern over single character
     classes; inputs are local files, not attacker-controlled streams.
 """
 import argparse
 import os
 import re
+import subprocess
 import sys
 
 STATES = ["active", "backlog", "future-ideas", "done", "wont-do"]
@@ -84,6 +92,7 @@ GENERIC_HEADINGS = {
     "what's needed", "design", "design document", "notes", "details", "status",
 }
 MAX_DESC = 150
+REMOTE_PREFIX = "refs/remotes/origin/"
 
 
 def stem(name):
@@ -302,6 +311,58 @@ def esc(s):
     return s.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
 
 
+def git_out(root, *args):
+    """stdout of a read-only git command run in `root`, or None (no git, not a
+    repo, an unknown ref…). Used only by main_drift."""
+    try:
+        p = subprocess.run(["git", "-C", root, *args], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace")
+    except OSError:                       # git is not installed
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def merged(root, head, ref):
+    """Whether branch `head` looks merged into `ref`: its tip is in `ref`, or
+    its upstream is gone from the remote (a merged pull request's branch
+    usually is)."""
+    if git_out(root, "merge-base", "--is-ancestor", "HEAD", ref) is not None:
+        return True
+    return bool(head) and git_out(root, "for-each-ref", "--format=%(upstream:track)",
+                                  f"refs/heads/{head}") == "[gone]"
+
+
+def main_drift(root, plans):
+    """[(stem, message)] for a start or finish missed on the main branch, when
+    the board is rendered on another branch or in a worktree: this checkout's
+    plans/ against the remote's main as last fetched (read-only; no fetch).
+    [] with no git or remote, or on the main branch itself."""
+    ref = (git_out(root, "symbolic-ref", "--quiet", REMOTE_PREFIX + "HEAD")
+           or REMOTE_PREFIX + "main")
+    main = ref[len(REMOTE_PREFIX):]
+    head = git_out(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    listing = None if head == main else git_out(
+        root, "ls-tree", "-r", "-z", "--name-only", ref, "--", "plans/")
+    if not listing:
+        return []
+    on_main = {}
+    for path in listing.split("\0"):
+        parts = path.split("/")
+        if len(parts) == 3 and parts[1] in STATES and parts[2].endswith(".md"):
+            on_main[stem(parts[2])] = parts[1]
+    rows = [(stem(f), f"active here, still in backlog on {main} — run /status-board:start")
+            for f in plan_files(os.path.join(plans, "active"))
+            if on_main.get(stem(f)) == "backlog"]
+    if merged(root, head, ref):
+        for state in ("done", "wont-do"):
+            for f in plan_files(os.path.join(plans, state)):
+                there = on_main.get(stem(f))
+                if there in ("active", "backlog"):
+                    rows.append((stem(f), f"{state} here and merged, still {there} on "
+                                          f"{main} — run /status-board:finish"))
+    return rows
+
+
 def find_root(start):
     """Walk up from `start` to the nearest dir containing a `plans/` subdir.
 
@@ -417,13 +478,15 @@ def main():
         next_missing = [s for s in (next_order or []) if s not in on_disk]
         # Migration: a pre-0.5 board has no "next — in order" heading and may
         # still hold its order as a bold line + list. The skill offers to migrate.
+        # A start or finish missed on main (only off main, only with git).
+        missed = main_drift(root, plans)
         migrate = []
         if next_order is None:
             migrate.append('no "next — in order" section (pre-0.5 board) — migrate')
         for n in legacy_next:
             migrate.append(
                 f'old-style next list at line {n} — move under "next — in order"')
-        if undocumented or stale or next_missing or migrate:
+        if undocumented or stale or next_missing or missed or migrate:
             rows.append("| **⚠️ Drift** | |")
             for s in undocumented:
                 rows.append(f"| {esc(s)} | undocumented (in folder, not in README) |")
@@ -431,6 +494,8 @@ def main():
                 rows.append(f"| {esc(s)} | stale (in README, no file) |")
             for s in next_missing:
                 rows.append(f"| {esc(s)} | in next-order list, no file |")
+            for s, msg in missed:
+                rows.append(f"| {esc(s)} | {esc(msg)} |")
             for msg in migrate:
                 rows.append(f"| plans/README.md | {esc(msg)} |")
 

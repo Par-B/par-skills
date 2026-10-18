@@ -340,3 +340,41 @@ def test_first_next_heading_wins(tmp_path):
     lines = _run(r)
     assert _section(lines, NEXT) == ["| 1. a | Title of a |"]
     assert _section(lines, BACKLOG) == ["| b | Title of b |"]
+
+
+# --- a start or finish missed on main (needs git) -----------------------------
+
+import plan_repos as repos  # noqa: E402
+
+
+def test_missed_start_flagged_from_a_branch(tmp_path):
+    main = repos.make(tmp_path)
+    wt = tmp_path / "wt"
+    repos.git(main, "worktree", "add", "-q", "-b", "thing", str(wt), "main")
+    repos.git(wt, "mv", f"plans/backlog/{repos.THING}.md", f"plans/active/{repos.THING}.md")
+    repos.commit_all(wt, "started on the branch only")
+    row = f"| {repos.THING} | active here, still in backlog on main — run /status-board:start |"
+    assert _section(_run(wt), "⚠️ Drift") == [row]
+    assert not any("/status-board:" in ln for ln in _run(main))
+
+
+def test_missed_finish_flagged_once_the_branch_is_gone(tmp_path):
+    main = repos.make(tmp_path, files=(f"active/{repos.THING}",),
+                      text=repos.readme(active=(repos.THING,)))
+    wt = tmp_path / "wt"
+    repos.git(main, "worktree", "add", "-q", "-b", "thing", str(wt), "main")
+    repos.git(wt, "push", "-q", "-u", "origin", "thing")
+    repos.git(wt, "mv", f"plans/active/{repos.THING}.md", f"plans/done/{repos.THING}.md")
+    repos.commit_all(wt, "finished on the branch")
+    assert not any("/status-board:" in ln for ln in _run(wt))    # not merged yet
+    repos.git(wt, "push", "-q", "origin", "--delete", "thing")   # merged, branch deleted
+    row = (f"| {repos.THING} | done here and merged, still active on main"
+           f" — run /status-board:finish |")
+    assert row in _section(_run(wt), "⚠️ Drift")
+
+
+def test_no_main_check_without_a_remote_main(tmp_path):
+    r = _board(tmp_path, _readme(["a"], mentions=["a"]), ["active/a"])
+    repos.git(tmp_path, "init", "-q")
+    repos.commit_all(tmp_path, "no remote")
+    assert "| **⚠️ Drift** | |" not in _run(r)
