@@ -51,7 +51,7 @@ LOG_FORMAT = "--format=%x01%h%x02%P%x02%s"
 # the options each reading command may take (positional arguments are refs,
 # ranges and, after "--", pathspecs)
 FLAGS = {"rev-parse": {"--show-toplevel", "--git-common-dir", "--verify", "--quiet"},
-         "rev-list": {"--count"},
+         "rev-list": {"--count", "--max-count=1"},
          "status": {"--porcelain", "--no-renames", "--untracked-files=all",
                     "--untracked-files=no"},
          "ls-tree": {"-r", "-z"},
@@ -84,8 +84,9 @@ def allowed(args):
     cmd, rest = args[0], list(args[1:])
     if cmd == "symbolic-ref":
         return len(rest) == 2 and rest[0] == "--quiet" and not rest[1].startswith("-")
-    if cmd == "cat-file":
-        return len(rest) == 2 and rest[0] == "blob" and not rest[1].startswith("-")
+    if cmd in ("cat-file", "check-ref-format"):
+        return (len(rest) == 2 and rest[0] == {"cat-file": "blob"}.get(cmd, "--branch")
+                and not rest[1].startswith("-"))
     if cmd == "worktree":
         return rest == ["list", "--porcelain"]
     if cmd not in FLAGS or (cmd == "log" and "--no-show-signature" not in rest):
@@ -174,17 +175,25 @@ def commits(g, top, rng):
     return res
 
 
+def own_shape(found, plans, base):
+    """True when every commit in `found` looks like one these checks make:
+    a single parent, an own subject, and only the plan's paths (whatever
+    their content)."""
+    guarded = set(guarded_paths(plans, base))
+    return bool(found) and all(len(parents) == 1 and subject in own_subjects(base)
+                               and paths and set(paths) <= guarded
+                               for _, parents, subject, paths in found)
+
+
 def only_own(g, top, found, plans, base, target):
-    """True when every commit in `found` is one this plan redoes: a single
-    parent, an own subject, and only paths the plan changes (`target`: path
-    -> its text after the plan, None for gone), each just as the plan leaves
-    it. None for `target` (the plan could not be worked out): False."""
-    if not found or target is None:
+    """True when every commit in `found` is one this plan redoes: own_shape,
+    and only paths the plan changes (`target`: path -> its text after the
+    plan, None for gone), each just as the plan leaves it. None for `target`
+    (the plan could not be worked out): False."""
+    if not own_shape(found, plans, base) or target is None:
         return False
-    mine = set(target) & set(guarded_paths(plans, base))
-    for sha, parents, subject, paths in found:
-        if (len(parents) != 1 or subject not in own_subjects(base) or not paths
-                or not set(paths) <= mine):
+    for sha, _, _, paths in found:
+        if not set(paths) <= set(target):
             return False
         for p in paths:
             got = g.run(top, "cat-file", "blob", f"{sha}:{p}")
@@ -324,13 +333,7 @@ def survey(g, facts, top, plans, base):
     s["wts"] = worktrees(g, top)
     checkout_facts(g, facts, s["wts"], plans, guarded_paths(plans, base))
     s["mc"] = next((w for w in s["wts"] if w["branch"] == main), None)
-    tree = {}
-    for entry in g.run(top, "ls-tree", "-r", "-z", upstream, "--", f"{plans}/").stdout.split("\0"):
-        meta, _, path = entry.partition("\t")
-        if path:
-            mode, _, oid = meta.split(" ")
-            tree[path] = (mode, oid)
-    s["tree"] = tree
+    s["tree"] = tree = tree_of(g, top, upstream, plans)
     here = find_pair(lambda p: os.path.isfile(os.path.join(top, p)), plans, base)
     s["found"] = find_pair(tree.__contains__, plans, base)
     facts.append(f"in this checkout: {names([f'{plans}/{st}/{f}' for st, f in here]) or 'none'}")
@@ -345,9 +348,25 @@ def survey(g, facts, top, plans, base):
     return s
 
 
+def tree_of(g, top, rev, plans):
+    """{path: (mode, oid)} of the files under plans/ in commit `rev`."""
+    tree = {}
+    for entry in g.run(top, "ls-tree", "-r", "-z", rev, "--", f"{plans}/").stdout.split("\0"):
+        meta, _, path = entry.partition("\t")
+        if path:
+            mode, _, oid = meta.split(" ")
+            tree[path] = (mode, oid)
+    return tree
+
+
+def text_of(g, top, tree, rel):
+    """The text of `rel` in `tree` (line endings made \\n), or None."""
+    return g.run(top, "cat-file", "blob", tree[rel][1]).stdout if rel in tree else None
+
+
 def blob(g, top, s, rel):
     """The text of `rel` on origin/main (line endings made \\n), or None."""
-    return g.run(top, "cat-file", "blob", s["tree"][rel][1]).stdout if rel in s["tree"] else None
+    return text_of(g, top, s["tree"], rel)
 
 
 def ahead_rule(g, facts, top, s, plans, base, target):
@@ -357,24 +376,38 @@ def ahead_rule(g, facts, top, s, plans, base, target):
     main, on, ahead, behind, mc = s["main"], s["on"], s["ahead"], s["behind"], s["mc"]
     if not ahead:
         return
-    if only_own(g, top, s["mine"], plans, base, target):
-        facts.append(f"local {main}'s commits not on {on} are only this check's own, "
-                     f"each just as this plan makes it")
+    own = only_own(g, top, s["mine"], plans, base, target)
+    stale = not own and behind and own_shape(s["mine"], plans, base)
+    if own or stale:
         ask = ["don't rebase, reset or drop the commit without asking the user first",
                "never force-push"]
-        if mc:
+        # a checkout whose folder is gone still holds main: prune it first
+        prune = (f"first clear the missing checkout of {main} (git worktree prune), then "
+                 if mc and mc["missing"] else "")
+        if mc and not mc["missing"]:
             drop = f"git reset --keep {on} in {mc['path']}"
             push = f"from {mc['path']}: git push {REMOTE} HEAD:refs/heads/{main}"
             rebase = (f"ask the user, then in {mc['path']}: git rebase --no-autostash {on} "
                       f"(it replays that one plans-only commit on top), then check again")
         else:
-            drop = f"git branch -f {main} {on}"
+            drop = f"{prune}git branch -f {main} {on}"
             push = (f"(no checkout has {main}; this names it exactly, from any checkout): "
-                    f"git push {REMOTE} refs/heads/{main}:refs/heads/{main}")
-            rebase = (f"a rebase needs a checkout of {main}, and none has it: ask the user "
-                      f"where to check {main} out, then there: git rebase --no-autostash "
-                      f"{on}, then check again")
-        drop = f"or ask the user, then drop it ({drop}) and check again: this plan redoes it"
+                    f"{prune}git push {REMOTE} refs/heads/{main}:refs/heads/{main}")
+            rebase = (f"a rebase needs a checkout of {main}, and none has it: {prune}ask "
+                      f"the user where to check {main} out, and run there: git rebase "
+                      f"--no-autostash {on}; then check again")
+        drop = f"ask the user, then drop it ({drop}) and check again: this plan redoes it"
+        if stale:
+            raise Blocked(
+                f"local {main} holds this check's own commit, made against an older {on}",
+                f"local {main} has {listed(s['mine'])}, which {on} lacks; {on} has since "
+                f"moved {behind} commit(s) and changed what this plan makes, so the commit "
+                f"no longer matches it",
+                safe=[f"see both sides: git log --oneline --left-right {main}...{on}"],
+                avoid=ask, options=[drop])
+        facts.append(f"local {main}'s commits not on {on} are only this check's own, "
+                     f"each just as this plan makes it")
+        drop = f"or {drop}"
         if behind:
             raise Blocked(
                 f"local {main} holds this check's own unpushed commit, and {on} has moved",
@@ -443,6 +476,16 @@ def leftovers(g, facts, s, top, plans, base, temp, target):
                 options=["keep what is worth keeping, then git worktree remove "
                          f"{shlex.quote(temp)} and check again"])
         if ahead and not only_own(g, top, ahead, plans, base, target):
+            if own_shape(ahead, plans, base) and ahead[-1][1] != [s["upstream"]]:
+                raise Blocked(
+                    f"the temporary worktree {temp} holds this check's own commit, made "
+                    f"against an older {s['on']}",
+                    f"a leftover from an earlier run holds {listed(ahead)}; {s['on']} has "
+                    f"since changed what this plan makes, so it no longer matches",
+                    safe=[f"look: {look} log --stat {s['on']}..HEAD"],
+                    avoid=[NEVER, "don't remove it without asking the user first"],
+                    options=[f"ask the user, then drop it (git worktree remove "
+                             f"{shlex.quote(temp)}) and check again: this plan redoes it"])
             raise Blocked(
                 f"the temporary worktree {temp} holds commits not on {s['on']}",
                 f"a leftover from an earlier run holds {listed(ahead)}; removing it "
@@ -475,18 +518,30 @@ def matches(path, rel, want):
         return want is not None and fh.read() == want
 
 
-def workspace(g, facts, s, top, plans, base, target):
+def workspace(g, facts, s, top, plans, base, target, verb):
     """Where the work happens: the main checkout when it is on main and clean
-    (outside plans/, and the plan's paths), else a temporary worktree.
-    `target` maps each path the plan changes to its new text (None: gone),
-    so a busy main checkout whose changes are an earlier run's is told
-    apart from the user's work."""
+    (outside plans/, and the plan's paths), else a temporary worktree."""
     mc = s["mc"]
-    busy = mc and (mc["missing"] or mc["merging"] or mc["guarded"] or mc["outside"])
+    busy = busy_main(g, facts, s, top, target, verb)
+    temp = None if mc and not busy else temp_path(top, base)
+    work = temp or mc["path"]
+    facts.append(f"workspace: a temporary worktree {temp}" if temp else
+                 f"workspace: the {s['main']} checkout {work}")
+    stale = leftovers(g, facts, s, top, plans, base, temp, target)
+    return {"mc": mc, "busy": busy, "temp": temp, "work": work, "stale": stale}
+
+
+def busy_main(g, facts, s, top, target, verb):
+    """True when the main checkout cannot take the work, with a fact saying
+    why and that it is left as it was. `target` maps each path the plan
+    changes to its new text (None: gone), so changes that are an earlier
+    run's (of `verb`) are told apart from the user's work."""
+    mc = s["mc"]
+    busy = bool(mc and (mc["missing"] or mc["merging"] or mc["guarded"] or mc["outside"]))
     if busy:
         dirt = mc["guarded"] + mc["outside"]
         if mc["missing"]:
-            why = "its folder is missing"
+            why = "its folder is missing (git worktree prune clears it)"
         elif mc["merging"]:
             why = "it is in the middle of a merge"
         elif not mc["outside"] and all(matches(mc["path"], p, blob(g, top, s, p))
@@ -496,19 +551,14 @@ def workspace(g, facts, s, top, plans, base, target):
         elif not mc["outside"] and all(
                 matches(mc["path"], p, target[p] if p in target else blob(g, top, s, p))
                 for p in dirt):
-            why = (f"its uncommitted changes ({names(dirt)}) are exactly what this finish "
+            why = (f"its uncommitted changes ({names(dirt)}) are exactly what this {verb} "
                    f"makes — left by an earlier run whose commit or push did not go "
                    f"through, not the user's work")
         else:
             why = f"it has uncommitted changes ({names(dirt)})"
         facts.append(f"the {s['main']} checkout at {mc['path']} is left as it was: {why}; "
                      f"pull it when ready")
-    temp = None if mc and not busy else temp_path(top, base)
-    work = temp or mc["path"]
-    facts.append(f"workspace: a temporary worktree {temp}" if temp else
-                 f"workspace: the {s['main']} checkout {work}")
-    stale = leftovers(g, facts, s, top, plans, base, temp, target)
-    return {"mc": mc, "busy": bool(busy), "temp": temp, "work": work, "stale": stale}
+    return busy
 
 
 def enter_steps(s, w, top, change):
@@ -559,16 +609,25 @@ def leave_steps(s, w, top, change):
     return []
 
 
-def moves_to(s, plans, to):
-    """([(how, src, dst)], [tracker]) that put the plan's files in `to`/ on
-    origin/main: "mv", or "rm" for a copy identical to the one kept. Every
-    move is checked first; Blocked when a copy to drop differs."""
-    tree, on = s["tree"], s["on"]
+def moves_to(tree, found, plans, to, on, fix):
+    """([(how, src, dst)], [tracker]) that put the plan's files (`found` in
+    `tree`, the commit `on` names) in `to`/: "mv", or "rm" for a copy
+    identical to the one kept. Trackers move along, or for done/ and
+    wont-do/ are dropped. Every move is checked first; Blocked when a copy
+    to drop differs (`fix`: how to keep one)."""
+    names_ = sorted({f for _, f in found})
+    moves = [(f"{plans}/{state}/{f}", f"{plans}/{to}/{f}") for state, f in found
+             if state != to]
+    trackers = [p for st in sb.STATES for f in names_
+                if (p := f"{plans}/{st}/{f}.tasks.json") in tree]
+    if to in TERMINAL:
+        drops = trackers
+    else:
+        drops = []
+        moves += [(p, f"{plans}/{to}/{p.rsplit('/', 1)[1]}") for p in trackers
+                  if p.split("/")[-2] != to]
     filled, plan, differ = {}, [], []    # filled: dst -> the src moved there
-    for state, f in s["found"]:
-        if state == to:
-            continue
-        src, dst = f"{plans}/{state}/{f}", f"{plans}/{to}/{f}"
+    for src, dst in moves:
         kept = filled.get(dst) or (dst if dst in tree else None)
         if kept is None:
             filled[dst] = src
@@ -581,14 +640,11 @@ def moves_to(s, plans, to):
         pairs = "; ".join(f"{a} and {b}" for a, b in differ)
         raise Blocked(
             "a copy that would be dropped differs from the kept one",
-            f"on {on}, {pairs} differ; finish keeps the copy in {to}/ and would delete "
-            f"the other",
+            f"on {on}, {pairs} differ; the copy in {to}/ is kept and the other would be "
+            f"deleted",
             safe=[f"compare: git diff {on}:{a} {on}:{b}" for a, b in differ],
             avoid=[NEVER, "never delete a copy that differs from the kept one"],
-            options=[f"keep one (or make them the same) on a branch or on {s['main']}, "
-                     f"push, fetch, then check again"])
-    drops = [p for st in sb.STATES for f in sorted({f for _, f in s["found"]})
-             if (p := f"{plans}/{st}/{f}.tasks.json") in tree]
+            options=[f"keep one (or make them the same) {fix}, then check again"])
     return plan, drops
 
 
@@ -613,6 +669,23 @@ def move_steps(work, tree, plan, drops, touched):
         steps.append(run_step(work, ["git", "rm", "--quiet", "--", src],
                               f"the tracker {src} removed and staged"))
     return steps
+
+
+def readme_steps(work, readme, text, new, stems, review, touched, brought=None):
+    """The README's edit steps (from `text` to `new`) and its `git add`, or
+    none; `review` also says when the note was made up (or brought over
+    from `brought`) and where else the README names the plan."""
+    if new == text:
+        return []
+    if not plan_readme.find_notes(text, stems):
+        review += (f"; the note was brought over from {brought} — check it still fits"
+                   if brought else
+                   "; the note was made up from the plan's title — reword it if needed")
+        for stem in sorted(mentions(text, stems)):
+            review += f"; {stem} is also named outside a list note — check that entry"
+    touched.append(readme)
+    return hunks(work, readme, text, new, review) + [
+        run_step(work, ["git", "add", "--", readme], f"{readme} staged")]
 
 
 def render(res):
@@ -640,6 +713,10 @@ def render(res):
             out.append(f"   {shlex.join(s['argv'])}")
             if s["kind"] == "run":
                 out.append(f"   expect: {s['expect']}")
+    q = res["question"]
+    if q:
+        out.append(f"Question (ask the user, then check again with the answer): {q['text']}")
+        out += [f"- --sync {o['answer']}: {o['label']} — {o['means']}" for o in q["options"]]
     b = res["blocked"]
     if b:
         out += [f"Blocked: {b['rule']}", f"Why: {b['why']}"]

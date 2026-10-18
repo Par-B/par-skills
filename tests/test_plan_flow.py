@@ -505,11 +505,6 @@ def test_the_check_changes_nothing(tmp_path):
     assert _state(main) == before
 
 
-def test_check_start_is_not_built_yet(tmp_path):
-    main = repos.make(tmp_path)
-    rc, res = repos.check(FLOW, main, "start", THING)
-    assert rc == 5 and "not built yet" in res["blocked"]["rule"], res
-
 
 def test_check_is_the_only_subcommand(tmp_path):
     main = repos.make(tmp_path)
