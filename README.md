@@ -833,6 +833,25 @@ Merge this into the `deny` array you already have (don't replace it). This is th
 one permission tweak that's **tied to a plugin** — unlike the plugin-independent
 baseline above, only add it if you actually run superpowers' planning flow.
 
+### Settings note — enable the task tools for superpowers
+
+superpowers tracks its checklists with Claude Code's **task tools** (`TaskCreate` /
+`TaskList` / `TaskGet` / `TaskUpdate`) — every skill with a checklist turns each
+item into a task. Some Claude Code setups leave those tools off, and the skills
+then have nowhere to record their progress. Turn them on with an environment
+variable in `~/.claude/settings.json`:
+
+```json
+"env": {
+  "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
+}
+```
+
+Merge this into the `env` block you already have (don't replace it), then start a
+new session. Like the `EnterPlanMode` deny, it only matters if you run superpowers;
+it is not part of [`recommended-permissions.json`](recommended-permissions.json),
+and the apply script doesn't set it.
+
 ## Layout
 
 ```text
