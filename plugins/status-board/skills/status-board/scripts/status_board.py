@@ -29,8 +29,8 @@ Security properties (for auditors — each is verifiable against the code below)
     It never fetches (lazy fetching of a partial clone's missing objects is
     switched off with --no-lazy-fetch; on git older than 2.44 the check is
     skipped), pushes, commits or checks out; it never prompts (no stdin,
-    GIT_TERMINAL_PROMPT=0) and each call is bounded by a timeout. No git: the
-    check is skipped.
+    GIT_TERMINAL_PROMPT=0) and each call is bounded by a timeout. An inherited
+    GIT_DIR/GIT_WORK_TREE is ignored. No git: the check is skipped.
   * Read-only: every open() below uses the default read mode (see parse_readme,
     parse_next_order and fallback_desc). The script never writes, creates,
     deletes, or renames anything on disk.
@@ -319,12 +319,15 @@ def git_out(root, *args):
     repo, an unknown ref, git older than 2.44, a timeout…). Used only by
     main_drift. --no-lazy-fetch stops a partial clone fetching missing objects
     from its remote; with no stdin and no terminal prompt git can't wait on
-    the user."""
+    the user. An inherited GIT_DIR/GIT_WORK_TREE is dropped so `-C root` always
+    means root's repo."""
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         p = subprocess.run(["git", "--no-lazy-fetch", "-C", root, *args],
                            capture_output=True, stdin=subprocess.DEVNULL,
                            text=True, encoding="utf-8", errors="replace",
-                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=5)
+                           env=env, timeout=5)
     except (OSError, subprocess.TimeoutExpired):   # no git, or git hung
         return None
     return p.stdout.strip() if p.returncode == 0 else None

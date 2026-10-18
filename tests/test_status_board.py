@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -349,6 +350,17 @@ import plan_repos as repos  # noqa: E402
 START_ROW = f"| {repos.THING} | active here, still in backlog on main — run /status-board:start |"
 
 
+def _git_version():
+    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
+    return tuple(int(n) for n in re.findall(r"\d+", out)[:2])
+
+
+# The main check uses --no-lazy-fetch (git 2.44+); on older git it is off, so
+# tests expecting its rows would fail. Tests expecting no row still hold.
+NEEDS_GIT_2_44 = pytest.mark.skipif(_git_version() < (2, 44),
+                                    reason="the main check needs git 2.44+")
+
+
 def _git_run(root):
     return _run(root, env=repos.ENV)
 
@@ -377,6 +389,7 @@ def _finished_branch(tmp_path, to="done"):
     return wt
 
 
+@NEEDS_GIT_2_44
 def test_missed_start_flagged_from_a_branch(tmp_path):
     main = repos.make(tmp_path)
     wt = _branch(main, tmp_path)
@@ -385,6 +398,7 @@ def test_missed_start_flagged_from_a_branch(tmp_path):
     assert not any("/status-board:" in ln for ln in _git_run(main))
 
 
+@NEEDS_GIT_2_44
 def test_missed_start_flagged_on_a_detached_head(tmp_path):
     main = repos.make(tmp_path)
     wt = _branch(main, tmp_path)
@@ -393,6 +407,7 @@ def test_missed_start_flagged_on_a_detached_head(tmp_path):
     assert _section(_git_run(wt), "⚠️ Drift") == [START_ROW]
 
 
+@NEEDS_GIT_2_44
 def test_missed_start_against_master_without_origin_head(tmp_path):
     main = repos.make(tmp_path)
     repos.git(main, "push", "-q", "origin", "main:master")
@@ -404,6 +419,7 @@ def test_missed_start_against_master_without_origin_head(tmp_path):
     assert _section(_git_run(wt), "⚠️ Drift") == [row]
 
 
+@NEEDS_GIT_2_44
 def test_missed_finish_flagged_once_the_branch_is_gone(tmp_path):
     wt = _finished_branch(tmp_path)
     assert not any("/status-board:" in ln for ln in _git_run(wt))    # not merged yet
@@ -413,6 +429,7 @@ def test_missed_finish_flagged_once_the_branch_is_gone(tmp_path):
     assert row in _section(_git_run(wt), "⚠️ Drift")
 
 
+@NEEDS_GIT_2_44
 def test_missed_finish_flagged_for_wont_do(tmp_path):
     wt = _finished_branch(tmp_path, to="wont-do")
     repos.git(wt, "push", "-q", "origin", "--delete", "thing")
@@ -456,7 +473,8 @@ def test_main_check_never_fetches_a_partial_clones_missing_trees(tmp_path):
     repos.git(main, "mv", f"plans/backlog/{repos.THING}.md", f"plans/active/{repos.THING}.md")
     repos.commit_all(main, "started on main")
     repos.git(main, "push", "-q", "origin", "main")
-    repos.git(tl, "fetch", "-q", "origin")             # the commit, not its trees
+    repos.git(tl, "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+              "fetch", "-q", "origin")                 # the commit, not its trees
     before = _packs(tl)
     _git_run(tl)
     assert _packs(tl) == before
