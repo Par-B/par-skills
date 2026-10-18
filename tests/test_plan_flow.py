@@ -15,7 +15,7 @@ BASE = "2026-01-01-thing"
 POSIX = pytest.mark.skipif(os.name != "posix", reason="the fake git is a POSIX shell script")
 
 sys.path.insert(0, str(FLOW.parent))
-import plan_flow  # noqa: E402
+import plan_check  # noqa: E402
 
 
 def _readme_on_main(cwd):
@@ -475,9 +475,11 @@ def test_check_is_the_only_subcommand(tmp_path):
 
 
 def test_the_script_runs_only_reading_git_commands(tmp_path):
-    source = FLOW.read_text(encoding="utf-8")
-    assert "import subprocess" not in source and "os.system" not in source
-    reader = plan_flow.Git()
+    for script in (FLOW, FLOW.with_name("plan_check.py")):
+        source = script.read_text(encoding="utf-8")
+        assert "import subprocess" not in source and "os.system" not in source
+    assert "__main__" not in FLOW.with_name("plan_check.py").read_text(encoding="utf-8")
+    reader = plan_check.Git()
     for args in (("commit", "-m", "x"), ("push",), ("worktree", "add", "x"),
                  ("merge", "x"), ("mv", "a", "b"), ("rm", "a"), ("fetch",)):
         with pytest.raises(AssertionError):
@@ -490,8 +492,8 @@ def test_the_script_runs_only_reading_git_commands(tmp_path):
 
 
 def test_git_from_a_missing_folder_is_blocked_not_called_uninstalled(tmp_path):
-    with pytest.raises(plan_flow.Blocked) as caught:
-        plan_flow.Git().run(str(tmp_path / "gone"), "rev-parse", "HEAD")
+    with pytest.raises(plan_check.Blocked) as caught:
+        plan_check.Git().run(str(tmp_path / "gone"), "rev-parse", "HEAD")
     assert "no folder" in caught.value.data["rule"]
 
 
