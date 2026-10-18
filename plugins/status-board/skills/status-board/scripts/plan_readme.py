@@ -2,15 +2,17 @@
 """Move a plan's notes between the sections of plans/README.md: text in, text out.
 
 Used by plan_flow.py when a plan starts or finishes. A note is a top-level list
-item, with its continuation lines (indented, or lazily unindented), whose first
-backticked slug or .md filename names one of the plan's files ({a,b} brace
-shorthand expanded). A section is found by its heading, as the board finds it:
-one holding the words "next" and "order" is the order list; otherwise the
-earliest of the words active, backlog, future/ideas, done/shipped and
-won't-do/rejected names the state. A section runs to the next heading of the
-same or a higher level, so one may sit inside another; each line belongs to the
-innermost section holding it. Lines in fenced code or HTML comments are never
-read as items or changed. No file, git or network access.
+item whose first backticked slug or .md filename names one of the plan's files
+({a,b} brace shorthand expanded), with its continuation lines: each non-blank
+line directly after it that is not a heading, a new list item, *(none)*, a
+comment or a fence, indented or not. A section is found by its heading, as the
+board finds it: one holding the words "next" and "order" is the order list;
+otherwise the earliest of the words active, backlog, future/ideas,
+done/shipped and won't-do/rejected names the state; the shallowest heading of a
+kind wins, then the first. A section runs to the next heading of the same or a
+higher level, so one may sit inside another; each line, a heading included,
+belongs to the innermost section holding it. Lines in fenced code or HTML
+comments are never read as items or changed. No file, git or network access.
 """
 import re
 
@@ -64,25 +66,26 @@ def _kind(heading):
 
 
 def _sections(lines, heads):
-    """{kind: (first, end)}: the body lines of the first heading of each kind."""
-    out = {}
+    """{kind: (first, end)}: the body lines of the shallowest heading of each
+    kind, the first among equals."""
+    out, levels = {}, {}
     for n, (i, level, text) in enumerate(heads):
         kind = _kind(text)
-        if kind and kind not in out:
+        if kind and level < levels.get(kind, 7):
             end = next((j for j, lv, _ in heads[n + 1:] if lv <= level), len(lines))
-            out[kind] = (i + 1, end)
+            out[kind], levels[kind] = (i + 1, end), level
     return out
 
 
 def _layout(lines):
     """(secs, hidden, heading lines, owner): owner[i] is the kind of the
-    innermost section holding line i, or None. Sections nest, never cross, so
-    the innermost is the one starting last."""
+    innermost section holding line i (its heading included), or None. Sections
+    nest, never cross, so the innermost is the one starting last."""
     heads, hidden = _scan(lines)
     secs = _sections(lines, heads)
     owner = [None] * len(lines)
     for kind, (first, end) in sorted(secs.items(), key=lambda s: s[1][0]):
-        owner[first:end] = [kind] * (end - first)
+        owner[first - 1:end] = [kind] * (end - first + 1)
     return secs, hidden, {i for i, _, _ in heads}, owner
 
 
@@ -219,7 +222,8 @@ def move_notes(text, stems, to, fallback):
     if not edits:
         return text
     edits.sort(key=lambda e: (e[0], e[1]))
-    assert all(a[1] <= b[0] for a, b in zip(edits, edits[1:])), "overlapping edits"
+    if any(a[1] > b[0] for a, b in zip(edits, edits[1:])):
+        raise ValueError("overlapping edits in plans/README.md")
     for start, stop, new in reversed(edits):
         lines[start:stop] = new
     if renumber:

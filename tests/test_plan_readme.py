@@ -150,6 +150,28 @@ def test_has_section():
     assert not plan_readme.has_section(text, "future-ideas")
 
 
+def test_note_goes_before_a_nested_section_opening_the_target():
+    fb = ["- `x` — f."]
+    text = "# Plans\n\n## backlog\n\n### next — in order\n\n1. `b`: why.\n"
+    assert _move(text, {"x"}, "backlog", fb) == (
+        "# Plans\n\n## backlog\n\n- `x` — f.\n\n### next — in order\n\n1. `b`: why.\n")
+    text = "# Plans\n\n## done\n\n### won't do\n\n- `w` — n.\n"
+    assert _move(text, {"x"}, "done", fb) == (
+        "# Plans\n\n## done\n\n- `x` — f.\n\n### won't do\n\n- `w` — n.\n")
+
+
+def test_shallowest_heading_of_a_kind_wins():
+    fb = ["- `x` — f."]
+    text = ("# Plans\n\n## active\n\n- `a` — n.\n\n### ideas spun off\n\n- `i` — n.\n\n"
+            "## future ideas\n\n*(none)*\n")
+    assert _move(text, {"x"}, "future-ideas", fb) == text.replace(
+        "## future ideas\n\n*(none)*", "## future ideas\n\n- `x` — f.")
+    text = ("# Plans\n\n## active\n\n### shipped soon\n\n- `s` — n.\n\n"
+            "## done\n\n*(none)*\n")
+    assert _move(text, {"x"}, "done", fb) == text.replace(
+        "## done\n\n*(none)*", "## done\n\n- `x` — f.")
+
+
 def test_wont_do_puts_note_at_top():
     text = readme(active=(THING,), wontdo=(OTHER,))
     assert _move(text, {THING}, "wont-do") == readme(wontdo=(THING, OTHER))
