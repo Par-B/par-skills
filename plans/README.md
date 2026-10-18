@@ -28,7 +28,7 @@ that carries a one-line note per plan.
 
 ## 🔵 active — in flight
 
-- `2026-10-17-status-board-start-and-finish-on-main-{design,plan}` — `/status-board:start` moves a plan to `active/` on `main` (pushed) and makes or syncs its branch from there; `/status-board:finish` checks and puts right the plan on `main` after a merge; the board flags a start or finish missed on `main`.
+*(none)*
 
 ## ⚪ not started — next, in order
 
@@ -48,6 +48,7 @@ The board shows the ones still in backlog/, renumbered from 1. -->
 
 ## 🟢 done — shipped
 
+- `2026-10-17-status-board-start-and-finish-on-main-{design,plan}` — status-board 0.7.0: `/status-board:start` and `/status-board:finish` (a read-only check plans the steps, Claude runs them; a plan is done only after its PRs are merged), the board's missed-start/finish rows, the watchdog and the rewritten approval hook; PR #10, merged 2026-10-17, released as v1.2.0.
 - `2026-10-17-status-board-next-label-says-not-started-design` — status-board 0.6.1: the board header becomes `⚪ Not started: next, in order` and the template heading `## ⚪ not started — next, in order`; old `⏭` headings still match.
 - `2026-10-17-status-board-next-order-design` — status-board 0.5.0: "Next, in order" section, migration for pre-0.5 boards, 0.4.x compatibility; PR #7, merged 2026-10-17.
 - `2026-10-17-status-board-next-order-plan` — its implementation plan (4 tasks, each reviewed).
