@@ -286,8 +286,8 @@ show); after a decline, don't offer again in this conversation:
 > done/won't-do notes go newest first<, and its done/won't-do notes aren't
 > newest first>. Update it?" (the bracketed part only when those rows show)
 
-This is a plans-only edit, so it is made on `main` and pushed. First choose
-where: the main checkout (`git worktree list` shows it) only when it is on
+This is a plans-only edit, so it is made on `main` and pushed. Only on explicit
+approval: first choose where: the main checkout (`git worktree list` shows it) only when it is on
 `main`, level with `origin/main` after `git fetch origin` (`git merge
 --ff-only --no-autostash origin/main` brings it level) and `plans/README.md`
 there is clean; otherwise `git worktree add --detach <dir> origin/main` and
